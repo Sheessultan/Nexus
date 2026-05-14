@@ -11,7 +11,7 @@ cd C:\path\to\console\agent\scripts
 powershell.exe -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\read-audit-clean.ps1
 ```
 
-From the AI Console **PowerShell** tab (after `cd` to the folder that contains `scripts`):
+From the NEXUS INTELLIGENCE **PowerShell** tab (after `cd` to the folder that contains `scripts`):
 
 ```powershell
 powershell -NoLogo -NoProfile -NonInteractive -ExecutionPolicy Bypass -File .\scripts\read-audit-clean.ps1

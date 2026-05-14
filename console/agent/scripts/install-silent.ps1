@@ -1,5 +1,5 @@
 <#
-  Registers a Windows Scheduled Task to run the AI Console agent at logon.
+  Registers a Windows Scheduled Task to run the NEXUS INTELLIGENCE agent at logon.
   Run from PowerShell:  .\install-silent.ps1 -ApiBase "http://127.0.0.1:4000"
   Requires: Python on PATH or set -PythonExe to full path to python.exe / py.exe
 #>

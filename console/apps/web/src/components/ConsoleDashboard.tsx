@@ -5,6 +5,7 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderOpen,
+  HardDrive,
   LayoutGrid,
   Maximize2,
   Menu,
@@ -17,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConsoleSocket } from '@/hooks/useConsoleSocket';
 import TerminalPanel from '@/components/TerminalPanel';
 import QuickToolsPanel from '@/components/QuickToolsPanel';
+import Dashboard from '@/components/dashboard';
 
 type Drive = { letter: string; path: string; freeGb: number | null };
 type DirEntry = { name: string; isDir: boolean; size: number | null };
@@ -31,9 +33,23 @@ function parseJson<T>(raw: unknown): T {
   return raw as T;
 }
 
+/** Parent folder for explorer `path`, or null to leave drive list (at drive root). */
+function explorerParentPath(p: string): string | null {
+  let t = p.replace(/\//g, '\\').trim();
+  while (t.endsWith('\\')) t = t.slice(0, -1);
+  if (!t) return null;
+  if (/^[A-Za-z]:$/.test(t)) return null;
+  const u = t.lastIndexOf('\\');
+  if (u <= 0) return null;
+  const parent = t.slice(0, u);
+  if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
+  return `${parent}\\`;
+}
+
 export default function ConsoleDashboard() {
   const { socket, conn, portalRequest } = useConsoleSocket();
-  const [path, setPath] = useState('C:\\');
+  const [path, setPath] = useState('');
+  const [dirLoading, setDirLoading] = useState(false);
   const [drives, setDrives] = useState<Drive[]>([]);
   const [entries, setEntries] = useState<DirEntry[]>([]);
   const [explorerError, setExplorerError] = useState<string | null>(null);
@@ -68,7 +84,7 @@ export default function ConsoleDashboard() {
   const autoMonitorPickDone = useRef(false);
   const [shellTab, setShellTab] = useState<'powershell' | 'cmd'>('powershell');
   const [agentElevated, setAgentElevated] = useState(false);
-  const [leftTab, setLeftTab] = useState<'explorer' | 'apps' | 'screen' | 'tools'>('explorer');
+  const [leftTab, setLeftTab] = useState<'explorer' | 'apps' | 'screen' | 'tools' | 'dashboard'>('explorer');
   const terminalSectionRef = useRef<HTMLDivElement>(null);
   const [sideLog, setSideLog] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -96,6 +112,7 @@ export default function ConsoleDashboard() {
 
   const refreshDir = useCallback(
     async (p: string) => {
+      setDirLoading(true);
       setExplorerError(null);
       try {
         const raw = await portalRequest('list_dir_json', { path: p });
@@ -110,6 +127,8 @@ export default function ConsoleDashboard() {
       } catch (e) {
         setExplorerError(e instanceof Error ? e.message : String(e));
         setEntries([]);
+      } finally {
+        setDirLoading(false);
       }
     },
     [portalRequest],
@@ -177,10 +196,11 @@ export default function ConsoleDashboard() {
     if (!socket) return;
     void (async () => {
       await refreshDrives();
-      await refreshDir('C:\\');
+      setEntries([]);
+      setExplorerError(null);
       await refreshApps();
     })();
-  }, [socket, refreshDrives, refreshDir, refreshApps]);
+  }, [socket, refreshDrives, refreshApps]);
 
   useEffect(() => {
     if (!socket) return;
@@ -299,8 +319,8 @@ export default function ConsoleDashboard() {
           }>(dbg);
           setScreenHint(
             `Screen check: mss=${String(j.hasMss)} pillow=${String(j.hasPillow)} capture=${String(j.captureOk)} mon=${String(j.monitor ?? screenMonitorRef.current)} ` +
-              (j.captureError ? `err=${j.captureError} ` : '') +
-              (j.jpegChars != null ? `jpeg~${j.jpegChars} chars` : ''),
+            (j.captureError ? `err=${j.captureError} ` : '') +
+            (j.jpegChars != null ? `jpeg~${j.jpegChars} chars` : ''),
           );
         } catch (e) {
           setScreenHint(e instanceof Error ? e.message : String(e));
@@ -336,6 +356,7 @@ export default function ConsoleDashboard() {
   }, [socket, liveDesktop, screenMonitor]);
 
   const breadcrumb = useMemo(() => {
+    if (!path.trim()) return [];
     const p = path.replace(/[/\\]+$/, '');
     const parts = p.split(/\\+/).filter(Boolean);
     const out: { label: string; full: string }[] = [];
@@ -364,10 +385,13 @@ export default function ConsoleDashboard() {
   }, [startMenu, appQuery]);
 
   const filteredEntries = useMemo(() => {
+    if (!path.trim()) return [];
     const q = appQuery.trim().toLowerCase();
     if (!q) return entries;
     return entries.filter((e) => e.name.toLowerCase().includes(q));
-  }, [entries, appQuery]);
+  }, [path, entries, appQuery]);
+
+  const drivesEmpty = drives.length === 0;
 
   const onScreenClick = useCallback(
     async (e: React.MouseEvent<HTMLImageElement>) => {
@@ -436,6 +460,17 @@ export default function ConsoleDashboard() {
         ) : null}
         <button
           type="button"
+          title="Dashboard"
+          className={navBtn(leftTab === 'dashboard', 'text-cyan-100/85')}
+          onClick={() => {
+            setLeftTab('dashboard');
+            pick();
+          }}
+        >
+          {compact ? <LayoutGrid className="h-4 w-4 text-cyan-200" /> : 'Dashboard'}
+        </button>
+        <button
+          type="button"
           title="Drives / Explorer"
           className={navBtn(leftTab === 'explorer', 'text-cyan-100/85')}
           onClick={() => {
@@ -484,6 +519,7 @@ export default function ConsoleDashboard() {
           className={navBtn(false, 'mt-1 border border-cyan-800/50 text-cyan-200/90 hover:border-cyan-500/40')}
           onClick={() => {
             setTerminalFocus(true);
+            setMobileNavOpen(false);
             pick();
           }}
         >
@@ -501,7 +537,12 @@ export default function ConsoleDashboard() {
             type="button"
             title="Ops: open quick tools tab"
             className="flex h-10 w-10 items-center justify-center rounded-lg border border-emerald-800/40 text-emerald-200/90 hover:border-emerald-500/40"
-            onClick={() => setLeftTab('tools')}
+            onClick={() => {
+              if (terminalFocus) {
+                setTerminalFocus(false);
+              }
+              setLeftTab('tools');
+            }}
           >
             <Wrench className="h-4 w-4" />
           </button>
@@ -532,7 +573,12 @@ export default function ConsoleDashboard() {
               key={t}
               type="button"
               className="cyber-nav-btn py-1.5 text-[10px] leading-tight text-emerald-200/85"
-              onClick={() => void runSidePortal(t)}
+              onClick={() => {
+                if (terminalFocus) {
+                  setTerminalFocus(false);
+                }
+                void runSidePortal(t);
+              }}
             >
               {label}
             </button>
@@ -540,7 +586,12 @@ export default function ConsoleDashboard() {
           <button
             type="button"
             className="cyber-nav-btn py-1.5 text-[10px] text-cyan-200/90"
-            onClick={() => void runSidePortal('open_mmc', { name: 'devmgmt.msc' })}
+            onClick={() => {
+              if (terminalFocus) {
+                setTerminalFocus(false);
+              }
+              void runSidePortal('open_mmc', { name: 'devmgmt.msc' });
+            }}
           >
             Device Manager
           </button>
@@ -558,11 +609,11 @@ export default function ConsoleDashboard() {
 
   return (
     <div
-      className={`relative flex w-full flex-col ${terminalFocus ? 'h-dvh min-h-0 overflow-hidden' : 'min-h-full'}`}
+      className={`relative z-[3] flex w-full flex-col ${terminalFocus ? 'h-dvh min-h-0 overflow-hidden' : 'min-h-full'}`}
     >
-      <div className="pointer-events-none fixed inset-0 z-[2] matrix-scanlines opacity-[0.12]" aria-hidden />
+      <div className="pointer-events-none fixed inset-0 z-[2] matrix-scanlines opacity-[0.06]" aria-hidden />
 
-      <header className="fixed top-0 right-0 left-0 z-[500] flex h-14 items-center gap-2 border-b border-cyan-500/25 bg-black/70 px-2 shadow-[0_8px_32px_rgba(0,0,0,0.65)] backdrop-blur-xl md:gap-3 md:px-4">
+      <header className="fixed top-0 right-0 left-0 z-[500] flex h-14 items-center gap-2 border-b border-cyan-500/20 bg-zinc-950/45 px-2 shadow-[0_8px_32px_rgba(0,0,0,0.35)] backdrop-blur-xl md:gap-3 md:px-4">
         <button
           type="button"
           className="rounded-lg border border-cyan-800/50 p-2 text-cyan-200 hover:border-cyan-500/40 lg:hidden"
@@ -572,16 +623,15 @@ export default function ConsoleDashboard() {
           <Menu className="h-5 w-5" />
         </button>
         <span className="hidden bg-gradient-to-r from-cyan-300 to-emerald-300 bg-clip-text text-sm font-bold tracking-tight text-transparent sm:inline">
-          AI Console
+          NEXUS INTELLIGENCE
         </span>
         <span
-          className={`shrink-0 rounded-md border px-2 py-0.5 font-mono text-[9px] font-semibold uppercase tracking-wide ${
-            conn === 'open'
-              ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-[0_0_12px_rgba(74,222,128,0.2)]'
-              : conn === 'connecting'
-                ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
-                : 'border-rose-500/35 bg-rose-950/40 text-rose-200/90'
-          }`}
+          className={`shrink-0 rounded-md border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${conn === 'open'
+            ? 'border-emerald-500/40 bg-emerald-500/10 text-emerald-300 shadow-[0_0_12px_rgba(74,222,128,0.2)]'
+            : conn === 'connecting'
+              ? 'border-cyan-500/40 bg-cyan-500/10 text-cyan-200'
+              : 'border-rose-500/35 bg-rose-950/40 text-rose-200/90'
+            }`}
         >
           {conn === 'open' ? 'Online' : conn === 'connecting' ? 'Connecting' : 'Offline'}
         </span>
@@ -598,7 +648,10 @@ export default function ConsoleDashboard() {
         <button
           type="button"
           title={terminalFocus ? 'Show full dashboard' : 'Terminal fills workspace'}
-          className="cyber-btn shrink-0 border-cyan-600/40 px-2 py-1.5"
+          className={`cyber-btn shrink-0 px-2 py-1.5 ${terminalFocus
+            ? 'border-emerald-500/50 bg-emerald-500/15 text-emerald-100 shadow-[0_0_16px_rgba(16,185,129,0.3)]'
+            : 'border-cyan-600/40'
+            }`}
           onClick={() => setTerminalFocus((v) => !v)}
         >
           {terminalFocus ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
@@ -611,7 +664,7 @@ export default function ConsoleDashboard() {
         >
           {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
         </button>
-        <span className="hidden shrink-0 font-mono text-[9px] text-cyan-800/90 xl:inline" title="Browser tab JS heap (approx.)">
+        <span className="hidden shrink-0 text-[9px] text-cyan-800/90 xl:inline" title="Browser tab JS heap (approx.)">
           RAM ~{tabHeapMb != null ? `${tabHeapMb} MB` : '—'}
         </span>
       </header>
@@ -632,368 +685,419 @@ export default function ConsoleDashboard() {
       ) : null}
 
       <aside
-        className={`fixed top-14 bottom-0 left-0 z-[490] hidden flex-col gap-2 border-r border-cyan-900/30 bg-black/75 py-2 shadow-[8px_0_40px_rgba(0,0,0,0.45)] backdrop-blur-lg transition-[width] duration-300 ease-out lg:flex ${
-          sidebarCollapsed ? 'w-16 overflow-hidden' : 'w-52 px-2'
-        }`}
+        className={`fixed top-14 bottom-0 left-0 z-[490] hidden flex-col gap-2 border-r border-cyan-900/30 bg-black/75 py-2 shadow-[8px_0_40px_rgba(0,0,0,0.45)] backdrop-blur-lg transition-[width] duration-300 ease-out lg:flex ${sidebarCollapsed ? 'w-16 overflow-hidden' : 'w-52 px-2'
+          }`}
       >
         {renderSidebarNav({ compact: sidebarCollapsed })}
         {renderOpsPanel({ compact: sidebarCollapsed })}
       </aside>
 
-      <div className={`flex min-h-0 flex-1 flex-col ${sidebarPad} pt-14`}>
+      <div className={`relative flex min-h-0 flex-1 flex-col ${sidebarPad} pt-14`}>
         {!terminalFocus ? (
           <div className="mx-auto flex w-full max-w-[1920px] min-w-0 flex-1 flex-col gap-4 px-3 pb-8 pt-4 md:px-5">
-            <div className="cyber-header text-xs leading-relaxed text-cyan-100/70 md:text-sm">
-              Remote <strong className="text-emerald-300/95">CMD</strong> &{' '}
-              <strong className="text-cyan-300/95">PowerShell</strong> via ConPTY on the agent. Run the agent elevated
-              for admin-only tools. Desktop preview may mirror this screen — use another display when tunneling.
-            </div>
+            {/* <div className="cyber-header text-xs leading-relaxed text-cyan-100/70 md:text-sm">
+              Unified <strong className="text-cyan-300/95">AI control system</strong> for real-time automation, analysis, and command execution.
+            </div> */}
 
-            <div className="grid min-h-[70vh] flex-1 grid-cols-1 items-stretch gap-4 lg:min-h-0 lg:grid-cols-12">
-        <section className="flex min-h-0 flex-col gap-3 lg:col-span-5">
-          <Tabs.Root
-            value={leftTab}
-            onValueChange={(v) => setLeftTab(v as 'explorer' | 'apps' | 'screen' | 'tools')}
-            className="cyber-panel flex min-h-[480px] flex-1 flex-col overflow-hidden lg:min-h-[520px]"
-          >
-            <Tabs.List className="flex shrink-0 flex-wrap gap-1 border-b border-cyan-500/20 bg-black/40 p-1 lg:hidden">
-              {(['explorer', 'apps', 'screen', 'tools'] as const).map((v) => (
-                <Tabs.Trigger
-                  key={v}
-                  value={v}
-                  className="min-w-0 flex-1 rounded-md px-2 py-2 text-xs font-medium text-cyan-200/50 transition-colors data-[state=active]:bg-cyan-500/15 data-[state=active]:text-cyan-50 data-[state=active]:shadow-[0_0_16px_rgba(0,240,255,0.12)] md:px-3 md:text-sm"
+            <div className="grid flex-1 grid-cols-1 items-stretch gap-4 min-h-[calc(100dvh-9rem)] lg:min-h-[calc(100dvh-8.5rem)] lg:grid-cols-12">
+              <section className="flex min-h-0 flex-col gap-3 lg:col-span-12">
+                <Tabs.Root
+                  value={leftTab}
+                  onValueChange={(v) => setLeftTab(v as 'explorer' | 'apps' | 'screen' | 'tools' | 'dashboard')}
+                  className="cyber-panel flex min-h-[min(480px,calc(100dvh-10rem))] flex-1 flex-col overflow-hidden"
                 >
-                  {v === 'explorer'
-                    ? 'Drives & files'
-                    : v === 'apps'
-                      ? 'Programs'
-                      : v === 'screen'
-                        ? 'Desktop view'
-                        : 'Quick tools'}
-                </Tabs.Trigger>
-              ))}
-            </Tabs.List>
-
-            <Tabs.Content value="explorer" className="flex flex-1 flex-col gap-3 p-3">
-              <div className="flex flex-wrap gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    void refreshDrives();
-                    void refreshDir(path);
-                  }}
-                  className="cyber-btn"
-                >
-                  Refresh
-                </button>
-                <button
-                  type="button"
-                  onClick={async () => {
-                    try {
-                      await portalRequest('launch_path', { path });
-                      setScreenHint(`Opened folder: ${path}`);
-                    } catch (e) {
-                      setScreenHint(e instanceof Error ? e.message : String(e));
-                    }
-                  }}
-                  className="cyber-btn cyber-btn-emerald"
-                >
-                  Open in Windows
-                </button>
-              </div>
-              <div className="flex flex-wrap gap-1.5">
-                {drives.map((d) => (
-                  <button
-                    key={d.letter}
-                    type="button"
-                    onClick={() => void refreshDir(d.path)}
-                    className="rounded-full border border-cyan-900/50 bg-black/40 px-3 py-1 text-xs font-medium text-cyan-100/90 ring-1 ring-cyan-500/15 transition-all duration-200 hover:border-cyan-500/40 hover:shadow-[0_0_12px_rgba(0,240,255,0.1)]"
-                  >
-                    {d.letter}:{' '}
-                    <span className="text-zinc-500">
-                      {d.freeGb != null ? `${d.freeGb} GB free` : ''}
-                    </span>
-                  </button>
-                ))}
-              </div>
-              <nav className="flex flex-wrap gap-1 text-xs text-cyan-800/90">
-                {breadcrumb.map((b, i) => (
-                  <span key={b.full} className="flex items-center gap-1">
-                    {i > 0 ? <span className="text-cyan-900">\</span> : null}
-                    <button
-                      type="button"
-                      className="rounded px-0.5 text-cyan-200/80 transition-colors duration-150 hover:text-cyan-50 hover:underline"
-                      onClick={() => void refreshDir(b.full)}
-                    >
-                      {b.label}
-                    </button>
-                  </span>
-                ))}
-              </nav>
-              {explorerError ? (
-                <p className="text-xs text-rose-400">{explorerError}</p>
-              ) : null}
-              <div className="cyber-scroll min-h-0 flex-1 overflow-auto rounded-lg border border-cyan-900/35 bg-black/35">
-                <ul className="divide-y divide-cyan-950/60">
-                  {filteredEntries.map((e) => (
-                    <li key={e.name}>
-                      <button
-                        type="button"
-                        className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-cyan-50/90 transition-colors duration-150 hover:bg-cyan-500/5"
-                        onDoubleClick={() => {
-                          const next = `${path.replace(/[/\\]+$/, '')}\\${e.name}`;
-                          if (e.isDir) void refreshDir(next);
-                        }}
-                        onClick={() => {
-                          const full = `${path.replace(/[/\\]+$/, '')}\\${e.name}`;
-                          if (!e.isDir && /\.(exe|bat|cmd|msi)$/i.test(e.name)) {
-                            void portalRequest('launch_path', { path: full }).catch(() => {});
-                          }
-                        }}
+                  <Tabs.List className="flex shrink-0 flex-wrap gap-1 border-b border-cyan-500/20 bg-black/40 p-1 lg:hidden">
+                    {(['dashboard', 'explorer', 'apps', 'screen', 'tools'] as const).map((v) => (
+                      <Tabs.Trigger
+                        key={v}
+                        value={v}
+                        className="min-w-0 flex-1 rounded-md px-2 py-2 text-xs font-medium text-cyan-200/50 transition-colors data-[state=active]:bg-cyan-500/15 data-[state=active]:text-cyan-50 data-[state=active]:shadow-[0_0_16px_rgba(0,240,255,0.12)] md:px-3 md:text-sm"
                       >
-                        <span className="truncate text-cyan-50/95">
-                          {e.isDir ? '[DIR] ' : ''}
-                          {e.name}
-                        </span>
-                        {e.size != null && !e.isDir ? (
-                          <span className="shrink-0 pl-2 text-[10px] text-cyan-700/90">
-                            {(e.size / 1024).toFixed(0)} KB
-                          </span>
-                        ) : null}
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-              <p className="text-[10px] leading-relaxed text-cyan-900/80">
-                Double-click a folder to open. Click an <code className="text-cyan-600/90">.exe</code> to launch on the
-                agent.
-              </p>
-            </Tabs.Content>
+                        {v === 'dashboard'
+                          ? 'Dashboard'
+                          : v === 'explorer'
+                            ? 'Drives & files'
+                            : v === 'apps'
+                              ? 'Programs'
+                              : v === 'screen'
+                                ? 'Desktop view'
+                                : 'Quick tools'}
+                      </Tabs.Trigger>
+                    ))}
+                  </Tabs.List>
 
-            <Tabs.Content value="apps" className="flex flex-1 flex-col gap-2 p-3">
-              <div className="flex gap-2">
-                <button
-                  type="button"
-                  onClick={() => setAppsTab('installed')}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-all duration-200 ${
-                    appsTab === 'installed' ? 'cyber-pill-active ring-emerald-500/30' : 'cyber-pill-idle'
-                  }`}
-                >
-                  Installed
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setAppsTab('start')}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-all duration-200 ${
-                    appsTab === 'start' ? 'cyber-pill-active ring-emerald-500/30' : 'cyber-pill-idle'
-                  }`}
-                >
-                  Start menu
-                </button>
-                <button
-                  type="button"
-                  onClick={() => void refreshApps()}
-                  className="cyber-btn ml-auto"
-                >
-                  Reload
-                </button>
-              </div>
-              <p className="text-[10px] text-cyan-800/90">Filter with the header search bar.</p>
-              <div className="cyber-scroll min-h-0 flex-1 overflow-auto rounded-lg border border-cyan-900/35 bg-black/30">
-                <ul className="divide-y divide-cyan-950/50">
-                  {(appsTab === 'installed' ? filteredInstalled : filteredStart).map((a, idx) => (
-                    <li key={`${a.name}-${idx}`} className="flex items-center gap-2 px-3 py-2 text-sm">
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-medium text-cyan-50/95">{a.name}</div>
-                        <div className="truncate text-[11px] text-cyan-800/90">
-                          {appsTab === 'installed' ? a.location || a.version : a.path}
-                        </div>
+                  <Tabs.Content value="dashboard" className="flex flex-1 flex-col p-3">
+                    <Dashboard />
+                  </Tabs.Content>
+
+                  <Tabs.Content value="explorer" className="flex min-h-0 flex-1 flex-col gap-2 p-3">
+                    <div className={`flex min-h-0 flex-1 flex-col gap-3 ${drivesEmpty ? '' : 'lg:flex-row'}`}>
+                      {!drivesEmpty ? (
+                        <aside
+                          className="flex shrink-0 flex-col gap-2 overflow-x-auto pb-1 lg:w-48 lg:min-w-[11rem] lg:flex-shrink-0 lg:overflow-y-auto lg:pb-0 lg:pr-1"
+                          aria-label="Drives"
+                        >
+                          <div className="flex items-center justify-between gap-2 px-0.5">
+                            <p className="hidden text-[9px] font-semibold uppercase tracking-[0.18em] text-cyan-600/90 lg:block">
+                              This PC
+                            </p>
+                            <button
+                              type="button"
+                              onClick={() => void refreshDrives()}
+                              className="cyber-btn shrink-0 px-2 py-1 text-[10px] lg:px-1.5"
+                              title="Reload drive list"
+                            >
+                              Refresh
+                            </button>
+                          </div>
+                          {path.trim() ? (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const parent = explorerParentPath(path);
+                                if (parent == null) {
+                                  setPath('');
+                                  setEntries([]);
+                                  setExplorerError(null);
+                                  setDirLoading(false);
+                                } else {
+                                  void refreshDir(parent);
+                                }
+                              }}
+                              className="cyber-btn cyber-btn-ghost w-full px-2 py-1.5 text-left text-[10px] lg:text-xs"
+                            >
+                              ← Back
+                            </button>
+                          ) : null}
+                          <div className="flex gap-2 overflow-x-auto lg:flex-col lg:overflow-x-visible lg:gap-1.5">
+                            {drives.map((d) => {
+                              const root = d.path.replace(/[/\\]+$/, '').toUpperCase();
+                              const cur = path.replace(/[/\\]+$/, '').toUpperCase();
+                              const active = cur === root || cur.startsWith(`${root}\\`);
+                              return (
+                                <button
+                                  key={d.letter}
+                                  type="button"
+                                  title={d.path}
+                                  onClick={() => {
+                                    const rootPath = d.path.replace(/[/\\]+$/, '');
+                                    setPath(`${rootPath}\\`);
+                                    setEntries([]);
+                                    setExplorerError(null);
+                                    void refreshDir(d.path);
+                                  }}
+                                  className={`flex min-w-[6.5rem] flex-col items-start gap-0.5 rounded-xl border px-2.5 py-2 text-left transition-all lg:min-w-0 lg:w-full ${active
+                                    ? 'border-cyan-400/50 bg-cyan-500/15 text-cyan-50 shadow-[0_0_16px_rgba(0,240,255,0.14)] ring-1 ring-cyan-400/25'
+                                    : 'border-cyan-900/40 bg-black/20 text-cyan-100/90 hover:border-cyan-500/45 hover:bg-cyan-500/5'
+                                    }`}
+                                >
+                                  <span className="flex items-center gap-1.5 text-[11px] font-semibold tracking-tight">
+                                    <HardDrive className="h-3.5 w-3.5 shrink-0 text-cyan-400/90" aria-hidden />
+                                    {d.letter}: <span className="font-normal text-cyan-700/90">Local Disk</span>
+                                  </span>
+                                  {d.freeGb != null ? (
+                                    <span className="pl-5 text-[10px] text-zinc-500">{d.freeGb} GB free</span>
+                                  ) : null}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </aside>
+                      ) : null}
+                      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+                        {!path.trim() ? (
+                          <div className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-xl border border-cyan-900/25 bg-black/20 px-4 py-8 text-center">
+                            {drivesEmpty ? (
+                              <>
+                                <p className="max-w-[18rem] text-xs leading-relaxed text-cyan-700/90">
+                                  No drives listed — connect the Windows agent, then reload. The drive column appears on the
+                                  left once volumes are available.
+                                </p>
+                                <button type="button" onClick={() => void refreshDrives()} className="cyber-btn mt-4 text-xs">
+                                  Retry drives
+                                </button>
+                              </>
+                            ) : (
+                              <p className="max-w-[15rem] text-xs leading-relaxed text-cyan-700/90">
+                                Select a drive on the left to browse folders and files.
+                              </p>
+                            )}
+                          </div>
+                        ) : (
+                          <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2">
+                            {dirLoading && !explorerError && entries.length === 0 ? (
+                              <p className="shrink-0 text-[11px] text-cyan-600/90">Loading directory…</p>
+                            ) : null}
+                            <div className="flex flex-wrap gap-2">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const parent = explorerParentPath(path);
+                                  if (parent == null) {
+                                    setPath('');
+                                    setEntries([]);
+                                    setExplorerError(null);
+                                    setDirLoading(false);
+                                  } else {
+                                    void refreshDir(parent);
+                                  }
+                                }}
+                                className="cyber-btn cyber-btn-ghost"
+                              >
+                                ← Back
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setPath('');
+                                  setEntries([]);
+                                  setExplorerError(null);
+                                  setDirLoading(false);
+                                }}
+                                className="cyber-btn cyber-btn-ghost"
+                              >
+                                All drives
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  void refreshDrives();
+                                  void refreshDir(path);
+                                }}
+                                className="cyber-btn"
+                              >
+                                Refresh
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  try {
+                                    await portalRequest('launch_path', { path });
+                                    setScreenHint(`Opened folder: ${path}`);
+                                  } catch (e) {
+                                    setScreenHint(e instanceof Error ? e.message : String(e));
+                                  }
+                                }}
+                                className="cyber-btn cyber-btn-emerald"
+                              >
+                                Open in Windows
+                              </button>
+                            </div>
+                            <nav className="flex min-h-[2rem] flex-wrap items-center gap-1 rounded-lg border border-cyan-900/25 bg-black/15 px-2 py-1.5 text-xs text-cyan-800/90">
+                              {breadcrumb.map((b, i) => (
+                                <span key={b.full} className="flex items-center gap-1">
+                                  {i > 0 ? <span className="text-cyan-900">\</span> : null}
+                                  <button
+                                    type="button"
+                                    className="rounded px-0.5 text-cyan-200/85 transition-colors duration-150 hover:text-cyan-50 hover:underline"
+                                    onClick={() => void refreshDir(b.full)}
+                                  >
+                                    {b.label}
+                                  </button>
+                                </span>
+                              ))}
+                            </nav>
+                            {explorerError ? (
+                              <p className="text-xs text-rose-400">{explorerError}</p>
+                            ) : null}
+                            <div className="cyber-scroll min-h-0 flex-1 overflow-auto rounded-lg border border-cyan-900/30 bg-black/10">
+                              <ul className="divide-y divide-cyan-950/50">
+                                {filteredEntries.map((e) => (
+                                  <li key={e.name}>
+                                    <button
+                                      type="button"
+                                      className="flex w-full items-center justify-between px-3 py-2 text-left text-sm text-cyan-50/90 transition-colors duration-150 hover:bg-cyan-500/5"
+                                      onDoubleClick={() => {
+                                        const next = `${path.replace(/[/\\]+$/, '')}\\${e.name}`;
+                                        if (e.isDir) void refreshDir(next);
+                                      }}
+                                      onClick={() => {
+                                        const full = `${path.replace(/[/\\]+$/, '')}\\${e.name}`;
+                                        if (!e.isDir && /\.(exe|bat|cmd|msi)$/i.test(e.name)) {
+                                          void portalRequest('launch_path', { path: full }).catch(() => { });
+                                        }
+                                      }}
+                                    >
+                                      <span className="truncate text-cyan-50/95">
+                                        {e.isDir ? '[DIR] ' : ''}
+                                        {e.name}
+                                      </span>
+                                      {e.size != null && !e.isDir ? (
+                                        <span className="shrink-0 pl-2 text-[10px] text-cyan-700/90">
+                                          {(e.size / 1024).toFixed(0)} KB
+                                        </span>
+                                      ) : null}
+                                    </button>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                            <p className="text-[10px] leading-relaxed text-cyan-900/80">
+                              Double-click a folder to open. Click an <code className="text-cyan-600/90">.exe</code> to launch
+                              on the agent.
+                            </p>
+                          </div>
+                        )}
                       </div>
+                    </div>
+                  </Tabs.Content>
+
+                  <Tabs.Content value="apps" className="flex flex-1 flex-col gap-2 p-3">
+                    <div className="flex gap-2">
                       <button
                         type="button"
-                        className="cyber-btn shrink-0 px-2 py-1 text-[11px]"
-                        onClick={() => {
-                          const target =
-                            appsTab === 'start'
-                              ? String(a.path || '')
-                              : String(a.location || '').trim();
-                          if (!target) return;
-                          void portalRequest('launch_path', { path: target }).catch(() => {});
-                        }}
+                        onClick={() => setAppsTab('installed')}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-all duration-200 ${appsTab === 'installed' ? 'cyber-pill-active ring-emerald-500/30' : 'cyber-pill-idle'
+                          }`}
                       >
-                        Open
+                        Installed
                       </button>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-            </Tabs.Content>
-
-            <Tabs.Content value="tools" className="flex min-h-0 flex-1 flex-col">
-              <QuickToolsPanel socket={socket} conn={conn} />
-            </Tabs.Content>
-
-            <Tabs.Content value="screen" className="flex min-h-0 flex-1 flex-col gap-3 p-3">
-              <div
-                ref={screenViewerRef}
-                className={`flex min-h-0 flex-1 flex-col gap-3 ${screenFullscreen ? 'box-border h-full bg-black/80 p-2' : ''}`}
-              >
-                <div className="flex flex-wrap items-center gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLiveDesktop((v) => {
-                        const next = !v;
-                        setScreenHint(next ? 'Live stream starting…' : 'Live stopped.');
-                        return next;
-                      });
-                    }}
-                    className={`cyber-btn ${liveDesktop ? 'cyber-btn-emerald' : ''}`}
-                  >
-                    {liveDesktop ? 'Stop live' : 'Live desktop'}
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => void captureScreen()}
-                    disabled={liveDesktop}
-                    className="cyber-btn cyber-btn-ghost disabled:pointer-events-none"
-                  >
-                    Snapshot
-                  </button>
-                  <button type="button" onClick={() => void toggleScreenFullscreen()} className="cyber-btn cyber-btn-ghost">
-                    {screenFullscreen ? 'Exit full screen' : 'Full screen'}
-                  </button>
-                  <label className="ml-auto flex items-center gap-2 text-[11px] text-cyan-800/95">
-                    <span className="shrink-0">Display</span>
-                    <select
-                      value={screenMonitor}
-                      onChange={(e) => setScreenMonitor(Number(e.target.value) || 1)}
-                      className="cyber-input max-w-[11rem] py-1 text-xs"
-                    >
-                      {monitorOptions.map((m) => (
-                        <option key={m.index} value={m.index}>
-                          {m.label}
-                          {m.width > 0 ? ` (${m.width}×${m.height})` : ''}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                </div>
-                {screenHint ? <p className="text-xs leading-snug text-cyan-700/90">{screenHint}</p> : null}
-                {screenSrc ? (
-                  <div
-                    className={`relative w-full overflow-hidden rounded-lg border border-cyan-900/40 bg-black ${
-                      screenFullscreen
-                        ? 'min-h-0 max-h-[calc(100dvh-9rem)] flex-1 sm:max-h-[calc(100dvh-7rem)]'
-                        : 'max-h-[420px]'
-                    }`}
-                  >
-                    <img
-                      src={screenSrc}
-                      alt="Desktop snapshot"
-                      className="mx-auto block h-auto max-h-full w-full cursor-crosshair object-contain"
-                      onClick={onScreenClick}
-                    />
-                    <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent px-3 pb-2 pt-10 text-left text-[10px] leading-snug text-cyan-200/80">
-                      Same-screen tunnel effect is normal — switch display or use another device.
+                      <button
+                        type="button"
+                        onClick={() => setAppsTab('start')}
+                        className={`rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition-all duration-200 ${appsTab === 'start' ? 'cyber-pill-active ring-emerald-500/30' : 'cyber-pill-idle'
+                          }`}
+                      >
+                        Start menu
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void refreshApps()}
+                        className="cyber-btn ml-auto"
+                      >
+                        Reload
+                      </button>
                     </div>
-                  </div>
-                ) : (
-                  <div
-                    className={`flex items-center justify-center rounded-lg border border-dashed border-cyan-900/40 px-4 text-center text-sm text-cyan-800/90 ${
-                      screenFullscreen ? 'min-h-[40vh] flex-1' : 'h-48'
-                    }`}
-                  >
-                    {liveDesktop
-                      ? 'Waiting for frames… check agent (mss/Pillow) and API.'
-                      : 'Start live or take a snapshot — click image to focus a window.'}
-                  </div>
-                )}
-              </div>
-            </Tabs.Content>
-          </Tabs.Root>
-        </section>
+                    <p className="text-[10px] text-cyan-800/90">Filter with the header search bar.</p>
+                    <div className="cyber-scroll min-h-0 flex-1 overflow-auto rounded-lg border border-cyan-900/35 bg-black/30">
+                      <ul className="divide-y divide-cyan-950/50">
+                        {(appsTab === 'installed' ? filteredInstalled : filteredStart).map((a, idx) => (
+                          <li key={`${a.name}-${idx}`} className="flex items-center gap-2 px-3 py-2 text-sm">
+                            <div className="min-w-0 flex-1">
+                              <div className="truncate font-medium text-cyan-50/95">{a.name}</div>
+                              <div className="truncate text-[11px] text-cyan-800/90">
+                                {appsTab === 'installed' ? a.location || a.version : a.path}
+                              </div>
+                            </div>
+                            <button
+                              type="button"
+                              className="cyber-btn shrink-0 px-2 py-1 text-[11px]"
+                              onClick={() => {
+                                const target =
+                                  appsTab === 'start'
+                                    ? String(a.path || '')
+                                    : String(a.location || '').trim();
+                                if (!target) return;
+                                void portalRequest('launch_path', { path: target }).catch(() => { });
+                              }}
+                            >
+                              Open
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </Tabs.Content>
 
-        <section ref={terminalSectionRef} className="flex min-h-0 flex-1 flex-col gap-3 lg:col-span-7">
-          <div className="cyber-panel flex min-h-[420px] flex-1 flex-col overflow-hidden p-4 lg:min-h-[520px]">
-            {accountLine ? (
-              <p className="mb-1 bg-gradient-to-r from-cyan-200 to-emerald-200 bg-clip-text font-mono text-[12px] font-semibold text-transparent">
-                {accountLine}
-              </p>
-            ) : null}
-            {machineLine ? (
-              <p className="mb-3 text-[10px] leading-snug text-cyan-600/90">{machineLine}</p>
-            ) : null}
-            <div className="mb-3 flex gap-1 rounded-xl border border-cyan-500/25 bg-black/50 p-1 ring-1 ring-emerald-500/10">
-              <button
-                type="button"
-                onClick={() => setShellTab('cmd')}
-                className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition-all md:text-sm ${
-                  shellTab === 'cmd'
-                    ? 'border border-cyan-400/40 bg-cyan-500/20 text-cyan-50 shadow-[0_0_20px_rgba(0,240,255,0.15)]'
-                    : 'text-cyan-200/50 hover:text-cyan-100'
-                }`}
-              >
-                CMD
-              </button>
-              <button
-                type="button"
-                onClick={() => setShellTab('powershell')}
-                className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition-all md:text-sm ${
-                  shellTab === 'powershell'
-                    ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-50 shadow-[0_0_20px_rgba(57,255,20,0.12)]'
-                    : 'text-emerald-200/50 hover:text-emerald-100'
-                }`}
-              >
-                <span className="inline-flex flex-wrap items-center justify-center gap-2">
-                  PowerShell
-                  {agentElevated ? (
-                    <span className="rounded border border-rose-500/50 bg-rose-950/80 px-1.5 font-mono text-[9px] text-rose-200 shadow-[0_0_10px_rgba(244,63,94,0.35)]">
-                      [ADMIN]
-                    </span>
-                  ) : null}
-                </span>
-              </button>
-            </div>
-            <div className="relative min-h-0 flex-1">
-              <div className={shellTab === 'powershell' ? 'flex h-full min-h-[280px] flex-col' : 'hidden'}>
-                <TerminalPanel
-                  socket={socket}
-                  conn={conn}
-                  portalRequest={portalRequest}
-                  shell="powershell"
-                  title="PowerShell"
-                  accountLine={accountLine}
-                  machineLine={machineLine}
-                  agentElevated={agentElevated}
-                  hideChrome
-                  isActive={shellTab === 'powershell'}
-                />
-              </div>
-              <div className={shellTab === 'cmd' ? 'flex h-full min-h-[280px] flex-col' : 'hidden'}>
-                <TerminalPanel
-                  socket={socket}
-                  conn={conn}
-                  portalRequest={portalRequest}
-                  shell="cmd"
-                  title="CMD"
-                  accountLine={accountLine}
-                  machineLine={machineLine}
-                  hideChrome
-                  isActive={shellTab === 'cmd'}
-                />
-              </div>
-            </div>
-          </div>
-        </section>
+                  <Tabs.Content value="tools" className="flex min-h-0 flex-1 flex-col">
+                    <QuickToolsPanel socket={socket} conn={conn} />
+                  </Tabs.Content>
+
+                  <Tabs.Content value="screen" className="flex min-h-0 flex-1 flex-col gap-3 p-3">
+                    <div
+                      ref={screenViewerRef}
+                      className={`flex min-h-[min(320px,calc(100dvh-18rem))] flex-1 flex-col gap-3 ${screenFullscreen ? 'box-border h-full bg-black/50 p-2' : ''}`}
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setLiveDesktop((v) => {
+                              const next = !v;
+                              setScreenHint(next ? 'Live stream starting…' : 'Live stopped.');
+                              return next;
+                            });
+                          }}
+                          className={`cyber-btn ${liveDesktop ? 'cyber-btn-emerald' : ''}`}
+                        >
+                          {liveDesktop ? 'Stop live' : 'Live desktop'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => void captureScreen()}
+                          disabled={liveDesktop}
+                          className="cyber-btn cyber-btn-ghost disabled:pointer-events-none"
+                        >
+                          Snapshot
+                        </button>
+                        <button type="button" onClick={() => void toggleScreenFullscreen()} className="cyber-btn cyber-btn-ghost">
+                          {screenFullscreen ? 'Exit full screen' : 'Full screen'}
+                        </button>
+                        <label className="ml-auto flex items-center gap-2 text-[11px] text-cyan-800/95">
+                          <span className="shrink-0">Display</span>
+                          <select
+                            value={screenMonitor}
+                            onChange={(e) => setScreenMonitor(Number(e.target.value) || 1)}
+                            className="cyber-input max-w-[11rem] py-1 text-xs"
+                          >
+                            {monitorOptions.map((m) => (
+                              <option key={m.index} value={m.index}>
+                                {m.label}
+                                {m.width > 0 ? ` (${m.width}×${m.height})` : ''}
+                              </option>
+                            ))}
+                          </select>
+                        </label>
+                      </div>
+                      {screenHint ? <p className="text-xs leading-snug text-cyan-700/90">{screenHint}</p> : null}
+                      {screenSrc ? (
+                        <div
+                          className={`relative flex min-h-0 w-full flex-1 overflow-hidden rounded-lg border border-cyan-900/35 bg-black/15 ${screenFullscreen
+                            ? 'min-h-0 max-h-[calc(100dvh-9rem)] flex-1 sm:max-h-[calc(100dvh-7rem)]'
+                            : 'min-h-[min(360px,calc(100dvh-20rem))] flex-1'
+                            }`}
+                        >
+                          <img
+                            src={screenSrc}
+                            alt="Desktop snapshot"
+                            className="mx-auto block h-full w-full max-h-full cursor-crosshair object-contain"
+                            onClick={onScreenClick}
+                          />
+                          <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/90 via-black/40 to-transparent px-3 pb-2 pt-10 text-left text-[10px] leading-snug text-cyan-200/80">
+                            Same-screen tunnel effect is normal — switch display or use another device.
+                          </div>
+                        </div>
+                      ) : (
+                        <div
+                          className={`flex flex-1 items-center justify-center rounded-lg border border-dashed border-cyan-900/40 px-4 text-center text-sm text-cyan-800/90 ${screenFullscreen ? 'min-h-[40vh]' : 'min-h-[min(200px,calc(100dvh-22rem))]'
+                            }`}
+                        >
+                          {liveDesktop
+                            ? 'Waiting for frames… check agent (mss/Pillow) and API.'
+                            : 'Start live or take a snapshot — click image to focus a window.'}
+                        </div>
+                      )}
+                    </div>
+                  </Tabs.Content>
+                </Tabs.Root>
+              </section>
             </div>
           </div>
         ) : (
           <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-2 px-2 pb-3 pt-2 md:px-4">
             <div className="cyber-panel flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden p-3">
+              <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => setTerminalFocus(false)}
+                  className="cyber-btn cyber-btn-ghost flex items-center gap-1 px-3 py-1.5 text-xs font-semibold md:text-sm"
+                >
+                  ← Back to Dashboard
+                </button>
+                <p className="text-[10px] text-cyan-600/75">Terminal workspace</p>
+              </div>
               {accountLine ? (
-                <p className="mb-1 shrink-0 bg-gradient-to-r from-cyan-200 to-emerald-200 bg-clip-text font-mono text-[12px] font-semibold text-transparent">
+                <p className="mb-1 shrink-0 bg-gradient-to-r from-cyan-200 to-emerald-200 bg-clip-text text-[12px] font-semibold text-transparent">
                   {accountLine}
                 </p>
               ) : null}
@@ -1004,69 +1108,45 @@ export default function ConsoleDashboard() {
                 <button
                   type="button"
                   onClick={() => setShellTab('cmd')}
-                  className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition-all md:text-sm ${
-                    shellTab === 'cmd'
-                      ? 'border border-cyan-400/40 bg-cyan-500/20 text-cyan-50 shadow-[0_0_20px_rgba(0,240,255,0.15)]'
-                      : 'text-cyan-200/50 hover:text-cyan-100'
-                  }`}
+                  className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition-all md:text-sm ${shellTab === 'cmd'
+                    ? 'border border-cyan-400/40 bg-cyan-500/20 text-cyan-50 shadow-[0_0_20px_rgba(0,240,255,0.15)]'
+                    : 'text-cyan-200/50 hover:text-cyan-100'
+                    }`}
                 >
                   CMD
                 </button>
                 <button
                   type="button"
                   onClick={() => setShellTab('powershell')}
-                  className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition-all md:text-sm ${
-                    shellTab === 'powershell'
-                      ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-50 shadow-[0_0_20px_rgba(57,255,20,0.12)]'
-                      : 'text-emerald-200/50 hover:text-emerald-100'
-                  }`}
+                  className={`flex-1 rounded-md px-3 py-2 text-xs font-semibold transition-all md:text-sm ${shellTab === 'powershell'
+                    ? 'border border-emerald-400/40 bg-emerald-500/15 text-emerald-50 shadow-[0_0_20px_rgba(57,255,20,0.12)]'
+                    : 'text-emerald-200/50 hover:text-emerald-100'
+                    }`}
                 >
                   <span className="inline-flex flex-wrap items-center justify-center gap-2">
                     PowerShell
                     {agentElevated ? (
-                      <span className="rounded border border-rose-500/50 bg-rose-950/80 px-1.5 font-mono text-[9px] text-rose-200 shadow-[0_0_10px_rgba(244,63,94,0.35)]">
+                      <span className="rounded border border-rose-500/50 bg-rose-950/80 px-1.5 text-[9px] font-semibold text-rose-200 shadow-[0_0_10px_rgba(244,63,94,0.35)]">
                         [ADMIN]
                       </span>
                     ) : null}
                   </span>
                 </button>
               </div>
-              <div className="relative min-h-0 flex-1">
-                <div
-                  className={
-                    shellTab === 'powershell'
-                      ? 'absolute inset-0 flex min-h-0 flex-col'
-                      : 'hidden'
-                  }
-                >
-                  <TerminalPanel
-                    socket={socket}
-                    conn={conn}
-                    portalRequest={portalRequest}
-                    shell="powershell"
-                    title="PowerShell"
-                    accountLine={accountLine}
-                    machineLine={machineLine}
-                    agentElevated={agentElevated}
-                    hideChrome
-                    isActive={shellTab === 'powershell'}
-                  />
-                </div>
-                <div
-                  className={shellTab === 'cmd' ? 'absolute inset-0 flex min-h-0 flex-col' : 'hidden'}
-                >
-                  <TerminalPanel
-                    socket={socket}
-                    conn={conn}
-                    portalRequest={portalRequest}
-                    shell="cmd"
-                    title="CMD"
-                    accountLine={accountLine}
-                    machineLine={machineLine}
-                    hideChrome
-                    isActive={shellTab === 'cmd'}
-                  />
-                </div>
+              <div className="relative flex min-h-0 flex-1 flex-col">
+                <TerminalPanel
+                  key={shellTab}
+                  socket={socket}
+                  conn={conn}
+                  portalRequest={portalRequest}
+                  shell={shellTab === 'cmd' ? 'cmd' : 'powershell'}
+                  title={shellTab === 'cmd' ? 'CMD' : 'PowerShell'}
+                  accountLine={accountLine}
+                  machineLine={machineLine}
+                  agentElevated={agentElevated}
+                  hideChrome
+                  isActive
+                />
               </div>
             </div>
           </div>

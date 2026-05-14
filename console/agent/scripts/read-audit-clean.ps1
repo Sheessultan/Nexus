@@ -5,7 +5,7 @@
 
 .DESCRIPTION
   Avoids Write-Host (Information stream). Writes plain text via [Console]::Out so output
-  stays readable when stdout is captured (e.g. AI Console agent, CI, WinRM).
+  stays readable when stdout is captured (e.g. NEXUS INTELLIGENCE agent, CI, WinRM).
 
 .NOTES
   Run examples:

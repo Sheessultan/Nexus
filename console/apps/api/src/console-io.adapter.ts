@@ -13,6 +13,8 @@ export class ConsoleIoAdapter extends IoAdapter {
   createIOServer(port: number, options?: ServerOptions) {
     const serverOptions = {
       ...options,
+      /** Long-polling handshakes send `Origin`; match gateway + HTTP CORS so LAN browsers (http://IP:3000) connect. */
+      cors: { origin: true, credentials: false },
       maxHttpBufferSize: 120_000_000,
       connectTimeout: 45_000,
       pingTimeout: 120_000,

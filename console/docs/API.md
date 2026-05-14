@@ -1,4 +1,4 @@
-# API reference — AI Console
+# API reference — NEXUS INTELLIGENCE
 
 Base URLs (local dev):
 

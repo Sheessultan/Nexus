@@ -25,7 +25,7 @@ The `agent` folder has **no `package.json`** — do not run `npm install` there;
 
 **Backend — `apps/api/package.json`**
 
-- NestJS **^10.4.x** (common, websockets, platform-socket.io, etc.)
+- NestJS **^11.1.x** (common, core, websockets, platform-socket.io, JWT, passport, etc.)
 - socket.io **^4.8.x**
 - TypeScript **^5.6.x**
 
@@ -42,6 +42,7 @@ The `agent` folder has **no `package.json`** — do not run `npm install` there;
 |----------|--------|
 | `CONSOLE_PTY_CWD` | Initial working directory for new PTY sessions (must exist). Default: user profile. |
 | `CONSOLE_PS_LOAD_PROFILE` | Set to `1`, `true`, `yes`, or `on` to load PowerShell profiles in the **interactive** PTY (default is `-NoProfile` for faster startup). |
+| `CONSOLE_AGENT_CONNECT_TIMEOUT` | Seconds to wait for Socket.IO `/console` (default **45**). Prevents the agent from appearing stuck when the API is down or the namespace never answers. |
 
 Run the agent **as Administrator** when you need elevated CMD/PowerShell (UAC); the UI shows `[ADMIN]` when `session_info` reports elevation.
 
@@ -49,12 +50,12 @@ Run the agent **as Administrator** when you need elevated CMD/PowerShell (UAC); 
 
 ## One-time install
 
-Adjust paths if your clone is not on the desktop.
+Use your real clone path (examples below use `%USERPROFILE%\Desktop\console` — replace if yours differs).
 
 ### 1) API
 
 ```powershell
-cd C:\Users\Administrator\Desktop\console\apps\api
+cd $env:USERPROFILE\Desktop\console\apps\api
 npm install
 ```
 
@@ -63,22 +64,32 @@ npm install
 ### 2) Web
 
 ```powershell
-cd C:\Users\Administrator\Desktop\console\apps\web
+cd $env:USERPROFILE\Desktop\console\apps\web
 npm install
 ```
 
-Create `apps\web\.env.local`:
+Create `apps\web\.env.local` (see `apps\web\.env.example`):
 
 ```env
 NEXT_PUBLIC_SOCKET_URL=http://localhost:4000/console
 ```
 
-If the API listens on another port or host, change this URL to match (must end with `/console` — Socket.IO namespace).
+Or use a shorter form when the API is on the same host name but port **4000**:
+
+```env
+NEXT_PUBLIC_API_ORIGIN=http://localhost:4000
+```
+
+If the API listens on another host or port, set one of the above to match (Socket URL must end with `/console` — Socket.IO namespace).
+
+When the UI is on **port 3000** and the API on **port 4000** on the **same non-loopback hostname** (e.g. your LAN IP), Socket.IO is proxied through Next (`/console-socket/socket.io` → API) so the browser only talks to **one origin** (fixes strict cross-origin to `:4000`). On **`localhost` / `127.0.0.1`**, the UI connects **directly** to `:4000` (no proxy), which is more reliable in Edge InPrivate. If the API is not on `http://127.0.0.1:4000` from Next’s point of view (e.g. Docker), set **`CONSOLE_API_INTERNAL`** in `apps\web\.env.local` (see `apps\web\.env.example`).
+
+When you open the site as **`http://<LAN-IP>:3000`** and **neither** variable is set, the UI tries **`http://<LAN-IP>:4000/console`** automatically (HTTP only). If you copied `.env.local` with **`localhost:4000`**, the web app **rewrites** that to the same **LAN hostname** as the page so other devices still reach your PC’s API (port unchanged). For HTTPS, a different API host, or a non-default API port, set `NEXT_PUBLIC_SOCKET_URL` explicitly to the real URL.
 
 ### 3) Agent (Python — not npm)
 
 ```powershell
-cd C:\Users\Administrator\Desktop\console\agent
+cd $env:USERPROFILE\Desktop\console\agent
 py -m pip install -r requirements.txt
 ```
 
@@ -88,22 +99,32 @@ py -m pip install -r requirements.txt
 
 ### Terminal A — API (default port **4000**)
 
+The API binds to **`0.0.0.0`** by default so other machines on the LAN can connect. Override with `HOST` in `.env` if needed (e.g. `HOST=127.0.0.1` for local-only).
+
 ```powershell
-cd C:\Users\Administrator\Desktop\console\apps\api
+cd $env:USERPROFILE\Desktop\console\apps\api
 npm run start:dev
 ```
+
+Allow **inbound TCP 4000** on the Windows Firewall (or your OS firewall) on the machine that runs the API when agents or browsers connect over the network.
 
 ### Terminal B — Web (default port **3000**)
 
 ```powershell
-cd C:\Users\Administrator\Desktop\console\apps\web
+cd $env:USERPROFILE\Desktop\console\apps\web
 npm run dev
 ```
+
+By default, `npm run dev` listens on **`0.0.0.0`** so you can open `http://<this-PC-LAN-IP>:3000` from a laptop or phone on the same network (Windows Firewall may prompt for Node). For **localhost-only** dev (no LAN), use `npm run dev:local`.
+
+Next.js **15+** blocks `/_next/*` (including **webpack HMR WebSocket**) unless the page’s `Origin` host is allowlisted. This repo’s `next.config` already allowlists common **private LAN** patterns (`192.168.*.*`, `10.*.*.*`, `172.16.*.*`–`172.31.*.*`). For odd hostnames (e.g. `*.local`), set **`NEXT_ALLOWED_DEV_ORIGINS`** in `apps\web\.env.local` (comma-separated hostnames only).
+
+The `dev:lan` script is the same bind as `dev` (kept for people following older notes).
 
 ### Terminal C — Agent (runs shells on **this** Windows PC)
 
 ```powershell
-cd C:\Users\Administrator\Desktop\console\agent
+cd $env:USERPROFILE\Desktop\console\agent
 py src\main.py --api http://127.0.0.1:4000
 ```
 
@@ -158,7 +179,7 @@ Typical split:
 ## Optional: login test
 
 ```powershell
-cd C:\Users\Administrator\Desktop\console\apps\api
+cd $env:USERPROFILE\Desktop\console\apps\api
 npm run login:test
 ```
 
@@ -172,8 +193,12 @@ Default credentials (unless changed in `.env`): **admin / admin**.
 |---------|------------|
 | `ENOENT package.json` in `agent\` | The agent is not a Node project — use `pip` and `py src\main.py`. |
 | `EADDRINUSE :::4000` | Stop the other process or run the API on another port and update `NEXT_PUBLIC_SOCKET_URL`. |
+| Agent “hangs” on startup, no registration | Start **Terminal A (API)** first. If the API is wrong or unreachable, the agent exits after **~45s** (override with `CONSOLE_AGENT_CONNECT_TIMEOUT`). Check `health:` / stderr for `Socket.IO connect failed` or timeout. |
+| `NameError` / crash on first **legacy** PowerShell line command | Use current `agent/src/main.py` from this repo (CLIXML strip helper must be defined). |
 | Blank desktop / capture errors | On the agent PC: `pip install mss Pillow`; restart the API (large JPEG payloads). |
 | CLIXML / XML in PowerShell output | Use the clean script `agent/scripts/read-audit-clean.ps1` or scripts that avoid `Write-Host` under redirection; restart the agent after upgrading `main.py`. |
+| Portal “System” info very slow | The agent uses **CIM** (`Win32_ComputerSystem` / `Win32_OperatingSystem`) instead of `Get-ComputerInfo` so it returns in seconds. |
+| UI **Online** on `localhost:3000` but **Offline** on `http://<LAN-IP>:3000` | Allow **inbound TCP 4000** (API) for Private networks in Windows Firewall; restart the API after changes. Open `http://<LAN-IP>:4000` in the browser — you should get a JSON/404 from Nest, not a timeout. |
 
 ---
 

@@ -15,7 +15,7 @@ This process runs **on the same PC** where you want commands to execute. The web
 ## Shell selection (from the UI terminal)
 
 - **CMD / PowerShell** tabs start separate **ConPTY** sessions (`pywinpty`): real `cmd.exe` / `powershell.exe` from **x64 System32**, UTF-8, arrow-key history, pipes, `diskpart` when you run it interactively, etc.
-- Optional agent env: **`CONSOLE_PTY_CWD`** (initial PTY folder), **`CONSOLE_PS_LOAD_PROFILE=1`** (load PowerShell profiles in the PTY; default is `-NoProfile` for speed).
+- Optional agent env: **`CONSOLE_PTY_CWD`** (initial PTY folder), **`CONSOLE_PS_LOAD_PROFILE=1`** (load PowerShell profiles in the PTY; default is `-NoProfile` for speed), **`CONSOLE_API_BASE`** (same as `--api`, e.g. `http://192.168.1.10:4000` when the Nest API is on another machine).
 - **Quick tools** panel sends one-shot lines as `terminal:input` (non-interactive script runner on the agent).
 
 ## Silent / background install
@@ -25,7 +25,7 @@ See **`agent/scripts/README-silent.md`** and **`agent/scripts/install-silent.ps1
 ## Quick start (development)
 
 1. Start API: `cd apps/api && npm run start:dev` (port **4000**).
-2. Start UI: `cd apps/web && npm run dev` (port **3000**).
+2. Start UI: `cd apps/web && npm run dev` (port **3000**), or `npm run dev:lan` so other PCs can open `http://<your-LAN-IP>:3000`.
 3. Install deps and run agent:
 
 ```powershell

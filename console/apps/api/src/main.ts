@@ -15,8 +15,10 @@ async function bootstrap() {
     }),
   );
   const port = Number(process.env.PORT || 4000);
-  await app.listen(port);
-  console.log(`API listening on http://localhost:${port}`);
+  /** Bind all interfaces so agents / browsers on the LAN can reach the API (firewall may still block). */
+  const host = (process.env.HOST || '0.0.0.0').trim() || '0.0.0.0';
+  await app.listen(port, host);
+  console.log(`API listening on http://${host}:${port} (from another PC use this machine's LAN IP + port)`);
 }
 
 bootstrap();

@@ -107,6 +107,43 @@ def _powershell_exe() -> str:
     return str(pathlib.Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
 
 
+_AGENT_ROOT = pathlib.Path(__file__).resolve().parent.parent
+_PS_PARSE_SCRIPT = _AGENT_ROOT / "scripts" / "parse-ps-complete.ps1"
+
+
+def _powershell_statement_parse_complete_sync(text: str) -> bool:
+    """True if Parser::ParseInput reports no incomplete / missing-input style errors (exit 0 from helper)."""
+    if platform.system().lower() != "windows" or not _PS_PARSE_SCRIPT.is_file():
+        return True
+    tmpd = tempfile.mkdtemp(prefix="console-ps-parse-")
+    try:
+        fp = pathlib.Path(tmpd) / "buffer.ps1"
+        fp.write_text(text, encoding="utf-8")
+        p = subprocess.run(
+            [
+                _powershell_exe(),
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-ExecutionPolicy",
+                "Bypass",
+                "-File",
+                str(_PS_PARSE_SCRIPT),
+                str(fp),
+            ],
+            capture_output=True,
+            text=True,
+            timeout=14,
+            encoding="utf-8",
+            errors="replace",
+        )
+        return p.returncode == 0
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    finally:
+        shutil.rmtree(tmpd, ignore_errors=True)
+
+
 def _powershell_script_block(cwd: str, command: str, cwd_file: pathlib.Path) -> str:
     """PS wrapper for -File execution: UTF-8, non-interactive safe prefs, Write-Host shadow."""
 
@@ -454,6 +491,7 @@ def open_browser_sync(browser: str, url: str) -> str:
     return f"{b} not found; opened default for {url}"
 
 
+_PS_CLIXML_HEAD = re.compile(r"#<\s*CLIXML\s*\r?\n?", re.IGNORECASE)
 _PS_ORPHAN_OBJ = re.compile(
     r"<Obj\s+S=\"(?:progress|information|verbose|warning|debug)\"[\s\S]*?</Obj>\s*",
     re.IGNORECASE,
@@ -743,11 +781,17 @@ async def handle_portal(
             await respond(True, out)
             return
         if typ == "system_info":
+            # Avoid Get-ComputerInfo — it can block for minutes on some hosts.
             script = (
-                "Get-ComputerInfo | Select-Object CsName,CsUserName,OsName,OsVersion,"
-                "OsArchitecture,WindowsVersion | ConvertTo-Json -Compress"
+                "$cs = Get-CimInstance Win32_ComputerSystem; "
+                "$os = Get-CimInstance Win32_OperatingSystem; "
+                "[pscustomobject]@{"
+                "CsName=$cs.Name; CsUserName=$cs.UserName; OsName=$os.Caption; "
+                "OsVersion=$os.Version; OsArchitecture=$os.OSArchitecture; "
+                "WindowsBuild=$os.BuildNumber"
+                "} | ConvertTo-Json -Compress"
             )
-            out = await asyncio.to_thread(run_ps, script, 90)
+            out = await asyncio.to_thread(run_ps, script, 45)
             await respond(True, out)
             return
         if typ == "list_apps":
@@ -920,7 +964,15 @@ async def handle_portal(
 
 
 async def run_agent(http_base: str, token: str | None) -> None:
-    sio = socketio.AsyncClient(logger=False, engineio_logger=False)
+    # Cap reconnection attempts (0 = infinite in python-socketio).
+    sio = socketio.AsyncClient(
+        logger=False,
+        engineio_logger=False,
+        reconnection=True,
+        reconnection_attempts=25,
+        reconnection_delay=1,
+        reconnection_delay_max=20,
+    )
     tasks: set[asyncio.Task[None]] = set()
     stream_task: asyncio.Task[None] | None = None
 
@@ -1020,6 +1072,26 @@ async def run_agent(http_base: str, token: str | None) -> None:
             namespace="/console",
         )
 
+    @sio.on("agent:powershell_parse", namespace="/console")
+    async def on_agent_powershell_parse(data: dict) -> None:
+        rid = str(data.get("requestId") or "")
+        if not rid:
+            return
+        text = str(data.get("text") or "")
+        try:
+            complete = await asyncio.to_thread(_powershell_statement_parse_complete_sync, text)
+            await sio.emit(
+                "agent:powershell_parse_result",
+                {"requestId": rid, "complete": complete},
+                namespace="/console",
+            )
+        except Exception as exc:  # pragma: no cover
+            await sio.emit(
+                "agent:powershell_parse_result",
+                {"requestId": rid, "complete": False, "error": str(exc)},
+                namespace="/console",
+            )
+
     @sio.on("agent:shell_exec", namespace="/console")
     async def on_shell_exec(data: dict) -> None:
         rid = str(data.get("requestId") or "")
@@ -1099,12 +1171,38 @@ async def run_agent(http_base: str, token: str | None) -> None:
         print("log:", data)
 
     headers = {"Authorization": f"Bearer {token}"} if token else {}
-    await sio.connect(
-        http_base,
-        namespaces=["/console"],
-        headers=headers,
-        transports=["websocket"],
-    )
+    connect_deadline = float(os.environ.get("CONSOLE_AGENT_CONNECT_TIMEOUT", "45") or "45")
+    try:
+        await asyncio.wait_for(
+            sio.connect(
+                http_base,
+                namespaces=["/console"],
+                headers=headers,
+                transports=["websocket"],
+                wait=True,
+                wait_timeout=5,
+                retry=False,
+            ),
+            timeout=connect_deadline,
+        )
+    except asyncio.TimeoutError:
+        print(
+            f"Socket.IO connect timed out after {connect_deadline:.0f}s "
+            f"(is the API running at {http_base}? namespace /console reachable?).",
+            file=sys.stderr,
+        )
+        try:
+            await sio.disconnect()
+        except BaseException:
+            pass
+        raise SystemExit(2) from None
+    except socketio.exceptions.ConnectionError as exc:
+        print(f"Socket.IO connect failed: {exc}", file=sys.stderr)
+        try:
+            await sio.disconnect()
+        except BaseException:
+            pass
+        raise SystemExit(2) from None
     try:
         await sio.wait()
     finally:
@@ -1127,20 +1225,26 @@ async def run_agent(http_base: str, token: str | None) -> None:
             pass
 
 
+def _normalize_http_base(raw: str) -> str:
+    """Strip whitespace and trailing slashes so /health joins correctly."""
+    return (raw or "").strip().rstrip("/")
+
+
 def probe_api(api_base: str) -> None:
     try:
-        r = httpx.get(f"{api_base}/health", timeout=3.0)
+        base = _normalize_http_base(api_base)
+        r = httpx.get(f"{base}/health", timeout=3.0)
         print("health:", r.status_code, r.text)
     except httpx.HTTPError as exc:
         print("health check failed:", exc, file=sys.stderr)
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="AI Console Windows agent")
+    parser = argparse.ArgumentParser(description="NEXUS INTELLIGENCE Windows agent")
     parser.add_argument(
         "--api",
         default=os.environ.get("CONSOLE_API_BASE", "http://127.0.0.1:4000"),
-        help="HTTP/Socket.IO base (no path suffix)",
+        help="HTTP origin of the Nest API (no path), e.g. http://192.168.1.10:4000 — same host you use in the browser for :4000",
     )
     parser.add_argument(
         "--token",
@@ -1148,6 +1252,7 @@ def main() -> None:
         help="Bearer token for authenticated handshakes",
     )
     args = parser.parse_args()
+    args.api = _normalize_http_base(args.api)
 
     if platform.system().lower() != "windows":
         print("Warning: agent targets Windows; continuing for development.", file=sys.stderr)

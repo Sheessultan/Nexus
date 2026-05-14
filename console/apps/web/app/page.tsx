@@ -1,7 +1,7 @@
 'use client';
 
-import ConsoleDashboard from '@/components/ConsoleDashboard';
+import Dashboard from '@/components/dashboard';
 
 export default function HomePage() {
-  return <ConsoleDashboard />;
+  return <Dashboard />;
 }

@@ -3,7 +3,7 @@
 :root {
   --neon-cyan: 34 211 238;
   --neon-green: 74 222 128;
-  --surface-glass: rgba(0, 0, 0, 0.45);
+  --surface-glass: rgba(0, 0, 0, 0.28);
   --scrollbar-track: rgba(0, 0, 0, 0.35);
   --scrollbar-thumb: rgba(34, 211, 238, 0.35);
   --scrollbar-thumb-hover: rgba(34, 211, 238, 0.55);
@@ -20,15 +20,16 @@ body {
 
 body {
   @apply min-h-screen text-zinc-100 antialiased;
-  font-family: var(--font-fira-code), var(--font-console-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
-  background-color: #000000;
+  font-family: var(--font-ui-sans), ui-sans-serif, system-ui, sans-serif;
+  background-color: rgba(2, 4, 8, 0.55);
   background-image:
-    linear-gradient(rgba(0, 240, 255, 0.022) 1px, transparent 1px),
-    linear-gradient(90deg, rgba(0, 240, 255, 0.022) 1px, transparent 1px),
-    radial-gradient(ellipse 100% 70% at 50% -25%, rgba(0, 240, 255, 0.07), transparent 50%),
-    radial-gradient(ellipse 55% 45% at 100% 15%, rgba(57, 255, 20, 0.04), transparent 50%),
-    linear-gradient(180deg, #000000 0%, #020204 45%, #000000 100%);
+    linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px),
+    radial-gradient(ellipse 100% 70% at 50% -25%, rgba(0, 240, 255, 0.12), transparent 55%),
+    radial-gradient(ellipse 55% 45% at 100% 15%, rgba(57, 255, 20, 0.06), transparent 50%),
+    linear-gradient(180deg, rgba(0, 0, 0, 0.2) 0%, rgba(2, 4, 10, 0.45) 50%, rgba(0, 0, 0, 0.35) 100%);
   background-size: 40px 40px, 40px 40px, auto, auto, auto;
+  background-attachment: fixed;
   text-rendering: optimizeLegibility;
 }
 
@@ -58,7 +59,7 @@ body {
 }
 
 .cyber-panel {
-  @apply rounded-2xl border border-cyan-500/20 bg-black/45 shadow-[0_0_48px_rgba(0,240,255,0.05)] ring-1 ring-emerald-400/10 backdrop-blur-md transition-shadow duration-300 ease-out;
+  @apply rounded-2xl border border-cyan-500/20 bg-zinc-950/35 shadow-[0_0_48px_rgba(0,240,255,0.06)] ring-1 ring-emerald-400/10 backdrop-blur-xl transition-shadow duration-300 ease-out;
 }
 
 .cyber-panel:hover {
@@ -66,7 +67,7 @@ body {
 }
 
 .cyber-header {
-  @apply rounded-2xl border border-cyan-500/25 bg-gradient-to-br from-black/85 via-zinc-950/95 to-black/85 px-5 py-4 shadow-[0_0_36px_rgba(57,255,20,0.05)] ring-1 ring-cyan-400/15 backdrop-blur-md;
+  @apply rounded-2xl border border-cyan-500/25 bg-gradient-to-br from-black/40 via-zinc-950/55 to-black/40 px-5 py-4 shadow-[0_0_36px_rgba(57,255,20,0.05)] ring-1 ring-cyan-400/15 backdrop-blur-lg;
 }
 
 .cyber-nav-btn {
@@ -102,7 +103,7 @@ body {
 }
 
 .cyber-input {
-  @apply rounded-lg border border-cyan-900/40 bg-black/50 px-3 py-2 text-sm text-cyan-50/95 outline-none transition-colors duration-200 placeholder:text-zinc-600;
+  @apply rounded-lg border border-cyan-900/35 bg-zinc-950/40 px-3 py-2 text-sm text-cyan-50/95 outline-none transition-colors duration-200 placeholder:text-zinc-500;
 }
 
 .cyber-input:focus {

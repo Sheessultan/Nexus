@@ -16,20 +16,75 @@ exports.ConsoleGateway = void 0;
 const crypto_1 = require("crypto");
 const websockets_1 = require("@nestjs/websockets");
 const socket_io_1 = require("socket.io");
+const powershell_parser_service_1 = require("./powershell-parser.service");
 const ps_script_complete_1 = require("./ps-script-complete");
 let ConsoleGateway = class ConsoleGateway {
-    constructor() {
+    constructor(powershellParser) {
+        this.powershellParser = powershellParser;
         this.agentSocketId = null;
         this.shellWaiters = new Map();
         this.portalWaiters = new Map();
+        this.psParseWaiters = new Map();
         this.terminalLineBuffers = new Map();
     }
     bufferKey(clientId, shell) {
         return `${clientId}:${shell}`;
     }
+    clearPsParseWaiters(reason) {
+        const err = new Error(reason);
+        for (const [, w] of this.psParseWaiters) {
+            clearTimeout(w.timer);
+            w.reject(err);
+        }
+        this.psParseWaiters.clear();
+    }
+    async waitAgentPsParse(text) {
+        if (!this.agentSocketId) {
+            throw new Error('No agent');
+        }
+        return await new Promise((resolve, reject) => {
+            const rid = (0, crypto_1.randomUUID)();
+            const timer = setTimeout(() => {
+                this.psParseWaiters.delete(rid);
+                reject(new Error('PowerShell parse request timed out'));
+            }, 14_000);
+            this.psParseWaiters.set(rid, {
+                resolve: (v) => {
+                    clearTimeout(timer);
+                    this.psParseWaiters.delete(rid);
+                    resolve(v);
+                },
+                reject: (e) => {
+                    clearTimeout(timer);
+                    this.psParseWaiters.delete(rid);
+                    reject(e);
+                },
+                timer,
+            });
+            this.server.to(this.agentSocketId).emit('agent:powershell_parse', { requestId: rid, text });
+        });
+    }
+    async resolvePowershellComplete(merged) {
+        if (this.powershellParser.isAvailable()) {
+            try {
+                return await this.powershellParser.isSyntacticallyComplete(merged);
+            }
+            catch {
+            }
+        }
+        if (this.agentSocketId) {
+            try {
+                return await this.waitAgentPsParse(merged);
+            }
+            catch {
+            }
+        }
+        return (0, ps_script_complete_1.isPowershellScriptComplete)(merged);
+    }
     handleDisconnect(client) {
         if (this.agentSocketId === client.id) {
             this.agentSocketId = null;
+            this.clearPsParseWaiters('Agent disconnected');
             this.server.emit('log:line', { line: '[console] Agent disconnected.' });
         }
         else if (this.agentSocketId) {
@@ -52,14 +107,17 @@ let ConsoleGateway = class ConsoleGateway {
             line: `[console] Agent registered (socket ${client.id}).`,
         });
     }
-    terminalInput(client, body) {
+    async terminalInput(client, body) {
         const raw = body?.data ?? '';
         const chunk = raw.replace(/\r?\n$/, '');
         const force = body?.force === true;
         const shell = body?.shell === 'cmd' ? 'cmd' : 'powershell';
         const key = this.bufferKey(client.id, shell);
-        if (!chunk.trim() && !force) {
-            return;
+        if (!force) {
+            const hasBuffer = (this.terminalLineBuffers.get(key) ?? '').length > 0;
+            if (!hasBuffer && !chunk.trim()) {
+                return;
+            }
         }
         if (!this.agentSocketId) {
             client.emit('terminal:output', {
@@ -81,9 +139,28 @@ let ConsoleGateway = class ConsoleGateway {
         }
         const prev = this.terminalLineBuffers.get(key) ?? '';
         const merged = prev ? `${prev}\n${chunk}` : chunk;
-        const complete = shell === 'powershell' ? (0, ps_script_complete_1.isPowershellScriptComplete)(merged) : (0, ps_script_complete_1.isCmdScriptComplete)(merged);
+        let complete;
+        if (shell === 'powershell') {
+            try {
+                complete = await this.resolvePowershellComplete(merged);
+            }
+            catch {
+                complete = (0, ps_script_complete_1.isPowershellScriptComplete)(merged);
+            }
+        }
+        else {
+            complete = (0, ps_script_complete_1.isCmdScriptComplete)(merged);
+        }
         if (!complete) {
             this.terminalLineBuffers.set(key, merged);
+            if (shell === 'powershell') {
+                client.emit('terminal:output', { data: '\r\n>> ', shell });
+            }
+            return;
+        }
+        const bodyNorm = merged.replace(/\r\n/g, '\n').trimEnd();
+        if (!bodyNorm.trim()) {
+            this.terminalLineBuffers.delete(key);
             return;
         }
         this.terminalLineBuffers.delete(key);
@@ -94,6 +171,24 @@ let ConsoleGateway = class ConsoleGateway {
             command: merged,
             shell,
         });
+    }
+    agentPowershellParseResult(agent, body) {
+        if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+            return;
+        }
+        const requestId = typeof body?.requestId === 'string' ? body.requestId : '';
+        if (!requestId) {
+            return;
+        }
+        const w = this.psParseWaiters.get(requestId);
+        if (!w) {
+            return;
+        }
+        if (body.error) {
+            w.reject(new Error(body.error));
+            return;
+        }
+        w.resolve(body.complete === true);
     }
     shellOutput(agent, body) {
         if (!this.agentSocketId || agent.id !== this.agentSocketId) {
@@ -299,8 +394,16 @@ __decorate([
     __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
     __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
-    __metadata("design:returntype", void 0)
+    __metadata("design:returntype", Promise)
 ], ConsoleGateway.prototype, "terminalInput", null);
+__decorate([
+    (0, websockets_1.SubscribeMessage)('agent:powershell_parse_result'),
+    __param(0, (0, websockets_1.ConnectedSocket)()),
+    __param(1, (0, websockets_1.MessageBody)()),
+    __metadata("design:type", Function),
+    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:returntype", void 0)
+], ConsoleGateway.prototype, "agentPowershellParseResult", null);
 __decorate([
     (0, websockets_1.SubscribeMessage)('agent:shell_output'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
@@ -392,7 +495,8 @@ __decorate([
 exports.ConsoleGateway = ConsoleGateway = __decorate([
     (0, websockets_1.WebSocketGateway)({
         namespace: '/console',
-        cors: { origin: true, credentials: true },
-    })
+        cors: { origin: true, credentials: false },
+    }),
+    __metadata("design:paramtypes", [powershell_parser_service_1.PowershellParserService])
 ], ConsoleGateway);
 //# sourceMappingURL=console.gateway.js.map

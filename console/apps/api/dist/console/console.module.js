@@ -9,12 +9,13 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.ConsoleModule = void 0;
 const common_1 = require("@nestjs/common");
 const console_gateway_1 = require("./console.gateway");
+const powershell_parser_service_1 = require("./powershell-parser.service");
 let ConsoleModule = class ConsoleModule {
 };
 exports.ConsoleModule = ConsoleModule;
 exports.ConsoleModule = ConsoleModule = __decorate([
     (0, common_1.Module)({
-        providers: [console_gateway_1.ConsoleGateway],
+        providers: [console_gateway_1.ConsoleGateway, powershell_parser_service_1.PowershellParserService],
     })
 ], ConsoleModule);
 //# sourceMappingURL=console.module.js.map

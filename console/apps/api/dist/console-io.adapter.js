@@ -9,6 +9,7 @@ class ConsoleIoAdapter extends platform_socket_io_1.IoAdapter {
     createIOServer(port, options) {
         const serverOptions = {
             ...options,
+            cors: { origin: true, credentials: false },
             maxHttpBufferSize: 120_000_000,
             connectTimeout: 45_000,
             pingTimeout: 120_000,

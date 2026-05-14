@@ -1,3 +1,4 @@
+export declare function powershellScriptForCompletionHeuristic(script: string): string;
 export declare function psDelimiterBalance(script: string): {
     paren: number;
     brace: number;

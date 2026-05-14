@@ -71,15 +71,15 @@ export default function TerminalPanel({
 
     const term = new Terminal({
       allowProposedApi: true,
+      allowTransparency: true,
       cursorBlink: true,
       convertEol: true,
       scrollback: 10000,
       lineHeight: 1.28,
-      fontFamily:
-        'var(--font-fira-code), var(--font-console-mono), "Cascadia Code", "Fira Code", ui-monospace, monospace',
+      fontFamily: '"Segoe UI Mono", "Cascadia Mono", Consolas, "Liberation Mono", ui-monospace, monospace',
       fontSize: 13,
       theme: {
-        background: '#030308',
+        background: 'rgba(3, 3, 10, 0.35)',
         foreground: '#c8fff4',
         cursor: '#00f0ff',
         selectionBackground: 'rgba(0, 240, 255, 0.22)',
@@ -167,24 +167,19 @@ export default function TerminalPanel({
         }
       }
       if (who) {
-        term.write(`\x1b[33m\x1b[1m${who}\x1b[0m\r\n`);
+        term.writeln(who);
       }
       if (machine) {
-        term.write(`\x1b[90m${machine}\x1b[0m\r\n`);
+        term.writeln(machine);
       }
       const label =
-        shell === 'cmd' ? 'CMD' : shell === 'powershell_admin' ? 'PowerShell [elevated tab]' : 'PowerShell';
-      const adm =
-        shell !== 'cmd' && agentElevated ? ' \x1b[31m[ADMIN]\x1b[0m' : '';
-      term.write(
-        `\x1b[38;2;0;240;255m${label}\x1b[0m${adm} — ConPTY (x64 System32). UTF-8. Interactive shell; streams match Windows Terminal (combined view).\r\n`,
-      );
+        shell === 'cmd' ? 'CMD' : shell === 'powershell_admin' ? 'PowerShell (elevated tab)' : 'PowerShell';
+      const adm = shell !== 'cmd' && agentElevated ? ' — Administrator context on agent' : '';
+      term.writeln(`${label}${adm} — interactive ConPTY session (UTF-8).`);
       if (!hideChrome) {
-        term.write(
-          `\x1b[90mQuick tools panel uses non-interactive script runner (separate from this PTY).\x1b[0m\r\n`,
-        );
+        term.writeln('Quick tools use a separate one-shot script runner (not this shell).');
       }
-      term.write('\r\n');
+      term.writeln('');
     };
 
     const onPtyOut = (msg: {
@@ -226,9 +221,22 @@ export default function TerminalPanel({
       term.writeln(`\x1b[33m${msg?.line ?? ''}\x1b[0m`);
     };
 
+    /** One-shot `agent:shell_exec` + multiline PS continuation (`>>`) from the gateway. */
+    const onLineShellOut = (msg: { data?: string; shell?: string }) => {
+      const sh = msg.shell === 'cmd' ? 'cmd' : 'powershell';
+      const panel = shell === 'cmd' ? 'cmd' : 'powershell';
+      if (sh !== panel) return;
+      let data = msg.data ?? '';
+      if (shell !== 'cmd') {
+        data = stripPsClixmlNoise(data);
+      }
+      term.write(data);
+    };
+
     socket.on('connect', onConnect);
     socket.on('disconnect', onDisconnect);
     socket.on('pty:output', onPtyOut);
+    socket.on('terminal:output', onLineShellOut);
     socket.on('log:line', onLog);
 
     term.onData((data) => {
@@ -331,6 +339,7 @@ export default function TerminalPanel({
       socket.off('connect', onConnect);
       socket.off('disconnect', onDisconnect);
       socket.off('pty:output', onPtyOut);
+      socket.off('terminal:output', onLineShellOut);
       socket.off('log:line', onLog);
       stopPty();
       term.dispose();
@@ -365,7 +374,7 @@ export default function TerminalPanel({
     shell === 'cmd' ? 'cmd.exe' : shell === 'powershell_admin' ? 'powershell (admin tab)' : 'powershell';
 
   return (
-    <div className="relative flex h-full min-h-[280px] flex-col gap-2 rounded-xl border border-cyan-500/25 bg-black/55 p-2 shadow-[0_0_40px_rgba(0,240,255,0.08)] ring-1 ring-emerald-400/15 backdrop-blur-md">
+    <div className="relative flex h-full min-h-[280px] flex-col gap-2 rounded-xl border border-cyan-500/20 bg-zinc-950/25 p-2 shadow-[0_0_40px_rgba(0,240,255,0.06)] ring-1 ring-emerald-400/10 backdrop-blur-md">
       {!socket ? (
         <div className="absolute inset-0 z-10 flex items-center justify-center rounded-lg bg-black/80 text-sm text-cyan-200/90">
           API connecting…
@@ -401,7 +410,7 @@ export default function TerminalPanel({
       ) : null}
       <div
         ref={hostRef}
-        className="cyber-scroll min-h-[220px] flex-1 overflow-hidden rounded-lg border border-cyan-900/35 bg-[#030308] p-1.5 outline-none focus-within:shadow-[0_0_24px_rgba(57,255,20,0.1)] focus-within:ring-2 focus-within:ring-cyan-400/30"
+        className="cyber-scroll min-h-[220px] flex-1 overflow-hidden rounded-lg border border-cyan-500/15 bg-black/20 p-1.5 outline-none focus-within:shadow-[0_0_24px_rgba(57,255,20,0.08)] focus-within:ring-2 focus-within:ring-cyan-400/25"
       />
     </div>
   );

@@ -1,12 +1,19 @@
 import { OnGatewayDisconnect } from '@nestjs/websockets';
 import { Server, Socket } from 'socket.io';
+import { PowershellParserService } from './powershell-parser.service';
 export declare class ConsoleGateway implements OnGatewayDisconnect {
+    private readonly powershellParser;
     server: Server;
+    constructor(powershellParser: PowershellParserService);
     private agentSocketId;
     private readonly shellWaiters;
     private readonly portalWaiters;
+    private readonly psParseWaiters;
     private readonly terminalLineBuffers;
     private bufferKey;
+    private clearPsParseWaiters;
+    private waitAgentPsParse;
+    private resolvePowershellComplete;
     handleDisconnect(client: Socket): void;
     agentHello(body: Record<string, unknown>): void;
     agentRegister(client: Socket): void;
@@ -14,6 +21,11 @@ export declare class ConsoleGateway implements OnGatewayDisconnect {
         data?: string;
         shell?: string;
         force?: boolean;
+    }): Promise<void>;
+    agentPowershellParseResult(agent: Socket, body: {
+        requestId?: string;
+        complete?: boolean;
+        error?: string;
     }): void;
     shellOutput(agent: Socket, body: {
         requestId?: string;

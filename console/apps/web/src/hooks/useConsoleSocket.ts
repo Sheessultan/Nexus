@@ -5,6 +5,112 @@ import { io, type Socket } from 'socket.io-client';
 
 export type ConnState = 'idle' | 'connecting' | 'open' | 'error';
 
+/** Exported for tests / callers that need the same rule as socket URL + transport selection. */
+export function isLoopbackHost(host: string): boolean {
+  const h = host.toLowerCase();
+  return h === 'localhost' || h === '127.0.0.1' || h === '[::1]' || h === '::1';
+}
+
+/**
+ * If the user opens the site as http://LAN-IP:3000 but `.env` still says localhost:4000,
+ * the browser would otherwise connect to the *viewer's* loopback — never the API.
+ * Rewrite loopback in env URLs to the page hostname; leave explicit non-loopback hosts unchanged.
+ */
+function rewriteLoopbackApiUrlForPage(url: string, pageHostname: string): string {
+  const trimmed = url.replace(/\/+$/, '');
+  if (!pageHostname || isLoopbackHost(pageHostname)) {
+    return trimmed;
+  }
+  try {
+    const u = new URL(trimmed);
+    if (!isLoopbackHost(u.hostname)) {
+      return trimmed;
+    }
+    u.hostname = pageHostname;
+    return u.toString().replace(/\/+$/, '');
+  } catch {
+    return trimmed;
+  }
+}
+
+/** Resolve Socket.IO URL for /console — LAN-friendly when env is unset. */
+export function getConsoleSocketUrl(): string {
+  const pageHost = typeof window !== 'undefined' ? window.location.hostname : '';
+
+  const direct = process.env.NEXT_PUBLIC_SOCKET_URL?.trim();
+  if (direct) {
+    return rewriteLoopbackApiUrlForPage(direct, pageHost);
+  }
+  const origin = process.env.NEXT_PUBLIC_API_ORIGIN?.trim().replace(/\/+$/, '');
+  if (origin) {
+    const o = rewriteLoopbackApiUrlForPage(origin, pageHost);
+    return `${o}/console`;
+  }
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname } = window.location;
+    const loopback = isLoopbackHost(hostname);
+    if (!loopback && protocol === 'http:') {
+      return `http://${hostname}:4000/console`;
+    }
+    if (!loopback && protocol === 'https:') {
+      return `https://${hostname}:4000/console`;
+    }
+  }
+  return 'http://localhost:4000/console';
+}
+
+/** Engine.IO path on the web origin; `next.config` rewrites this to the real Nest `/socket.io`. */
+export const CONSOLE_SOCKET_PROXY_ENGINE_PATH = '/console-socket/socket.io';
+
+/**
+ * When the UI is on :3000 and the API on :4000 on a **LAN hostname**, the browser treats that as
+ * cross-origin; proxying Engine.IO through Next fixes that.
+ * On **loopback** (localhost / 127.0.0.1), connect **directly** to :4000 — the proxy can hang in Edge InPrivate.
+ */
+function getConsoleSocketIoParams(): {
+  url: string;
+  path: string;
+  transports: ('websocket' | 'polling')[];
+} {
+  const directUrl = getConsoleSocketUrl();
+  if (typeof window === 'undefined') {
+    return { url: directUrl, path: '/socket.io', transports: ['websocket', 'polling'] };
+  }
+  const pageOrigin = window.location.origin;
+  const pageHost = window.location.hostname;
+  const pageIsLoopback = isLoopbackHost(pageHost);
+  try {
+    const api = new URL(directUrl);
+    const page = new URL(pageOrigin);
+    const apiPort = api.port || (api.protocol === 'https:' ? '443' : '80');
+    const sameHost = api.hostname === page.hostname;
+    const sameScheme = api.protocol === page.protocol;
+    const useProxy =
+      !pageIsLoopback &&
+      api.origin !== page.origin &&
+      sameHost &&
+      sameScheme &&
+      apiPort === '4000';
+    if (useProxy) {
+      return {
+        url: `${pageOrigin}/console`,
+        path: CONSOLE_SOCKET_PROXY_ENGINE_PATH,
+        transports: ['websocket', 'polling'],
+      };
+    }
+  } catch {
+    /* fall through to direct */
+  }
+  return {
+    url: directUrl,
+    path: '/socket.io',
+    transports:
+      pageHost && !isLoopbackHost(pageHost)
+        ? ['polling', 'websocket']
+        : ['websocket', 'polling'],
+  };
+}
+
 export function useConsoleSocket() {
   const socketRef = useRef<Socket | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
@@ -14,11 +120,11 @@ export function useConsoleSocket() {
   );
 
   useEffect(() => {
-    const url =
-      process.env.NEXT_PUBLIC_SOCKET_URL?.trim() || 'http://localhost:4000/console';
+    const { url, path, transports } = getConsoleSocketIoParams();
     const s = io(url, {
-      transports: ['websocket'],
-      timeout: 120_000,
+      path,
+      transports,
+      timeout: 45_000,
       reconnectionDelay: 1000,
       reconnectionDelayMax: 10_000,
     });

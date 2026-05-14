@@ -97,12 +97,18 @@ def _cmd_argv() -> list[str]:
     return [exe, "/Q", "/V:ON", "/K", "chcp 65001 >nul"]
 
 
+# One script block + CRLF so the parser always completes (avoids a stray `>>` continuation line after init).
+# Do not set PSReadLine ContinuationPrompt to literal `>>` — it can render like a stuck multi-line prompt in xterm.
 _PS_INIT = (
-    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::UTF8\r\n"
-    "$OutputEncoding = [System.Text.UTF8Encoding]::UTF8\r\n"
-    "try { if ($PSVersionTable.PSVersion.Major -ge 7) { $PSStyle.OutputRendering = 'PlainText' } } catch {}\r\n"
-    "$ProgressPreference = 'SilentlyContinue'\r\n"
-    "$ErrorView = 'NormalView'\r\n"
+    "& { "
+    "$ErrorActionPreference = 'SilentlyContinue'; "
+    "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::UTF8; "
+    "$OutputEncoding = [System.Text.UTF8Encoding]::UTF8; "
+    "try { if ($PSVersionTable.PSVersion.Major -ge 7) { $PSStyle.OutputRendering = 'PlainText' } } catch {}; "
+    "$ProgressPreference = 'SilentlyContinue'; "
+    "$ErrorView = 'NormalView'; "
+    "try { Import-Module PSReadLine | Out-Null } catch {} "
+    "}\r\n"
 )
 
 
@@ -138,23 +144,6 @@ class PtySession:
                 return _powershell_interactive_argv()
         return _powershell_interactive_argv()
 
-    def _post_spawn_banner(self) -> str:
-        if self.shell == "cmd":
-            if _is_elevated():
-                return "\x1b[31m[ADMIN]\x1b[0m Elevated CMD (ConPTY) · UTF-8 · x64 System32\r\n"
-            return "\x1b[90mCMD ConPTY · UTF-8 (chcp 65001) · delayed expansion /V:ON\x1b[0m\r\n"
-        path_line = (
-            "\x1b[90mx64 host: %SystemRoot%\\System32\\WindowsPowerShell\\v1.0\\powershell.exe\x1b[0m\r\n"
-        )
-        if _is_elevated():
-            return f"\x1b[31m[ADMIN]\x1b[0m Elevated PowerShell (ConPTY)\r\n{path_line}"
-        if self.shell == "powershell_admin":
-            return (
-                "\x1b[33m[NOTICE] Agent is not elevated — start the agent as Administrator for an elevated ConPTY.\x1b[0m\r\n"
-                + path_line
-            )
-        return path_line
-
     def start_sync(self) -> None:
         if not pty_available():
             raise RuntimeError("pywinpty not available")
@@ -163,9 +152,8 @@ class PtySession:
         argv = self._argv()
         dims = (self.rows, self.cols)
         self.proc = PtyProcess.spawn(argv, cwd=cwd, env=env, dimensions=dims)
-        banner = self._post_spawn_banner()
-        if banner:
-            self.proc.write(banner)
+        # Never write decorative/ANSI text into the PTY stdin — PowerShell parses `[...]` and
+        # stripped ESC bytes become `[0m`-style garbage → ParserError. UI shows session info.
         if self.shell in ("powershell", "powershell_admin"):
             self.proc.write(_PS_INIT)
 
