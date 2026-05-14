@@ -21,7 +21,7 @@ body {
 body {
   @apply min-h-screen text-zinc-100 antialiased;
   font-family: var(--font-ui-sans), ui-sans-serif, system-ui, sans-serif;
-  background-color: rgba(2, 4, 8, 0.55);
+  background-color: rgb(3 7 12);
   background-image:
     linear-gradient(rgba(0, 240, 255, 0.03) 1px, transparent 1px),
     linear-gradient(90deg, rgba(0, 240, 255, 0.03) 1px, transparent 1px),

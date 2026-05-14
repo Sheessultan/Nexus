@@ -13,6 +13,7 @@ import argparse
 import asyncio
 import base64
 import ctypes
+import uuid
 import io
 import json
 import os
@@ -109,6 +110,34 @@ def _powershell_exe() -> str:
 
 _AGENT_ROOT = pathlib.Path(__file__).resolve().parent.parent
 _PS_PARSE_SCRIPT = _AGENT_ROOT / "scripts" / "parse-ps-complete.ps1"
+
+
+def _machine_id_file() -> pathlib.Path:
+    """Per-PC stable id so the console can list many machines."""
+    local = os.environ.get("LOCALAPPDATA", "")
+    if local:
+        root = pathlib.Path(local) / "ConsoleAgent"
+    else:
+        root = pathlib.Path.home() / "AppData" / "Local" / "ConsoleAgent"
+    root.mkdir(parents=True, exist_ok=True)
+    return root / "machine_id.txt"
+
+
+def load_or_create_machine_id() -> str:
+    p = _machine_id_file()
+    try:
+        if p.is_file():
+            s = p.read_text(encoding="utf-8").strip()
+            if 8 <= len(s) <= 128:
+                return s
+    except OSError:
+        pass
+    uid = str(uuid.uuid4())
+    try:
+        p.write_text(uid, encoding="utf-8")
+    except OSError:
+        return uid[:36]
+    return uid
 
 
 def _powershell_statement_parse_complete_sync(text: str) -> bool:
@@ -964,14 +993,15 @@ async def handle_portal(
 
 
 async def run_agent(http_base: str, token: str | None) -> None:
-    # Cap reconnection attempts (0 = infinite in python-socketio).
+    machine_id = load_or_create_machine_id()
+    # reconnection_attempts=0 → keep retrying when API is down or network returns.
     sio = socketio.AsyncClient(
         logger=False,
         engineio_logger=False,
         reconnection=True,
-        reconnection_attempts=25,
+        reconnection_attempts=0,
         reconnection_delay=1,
-        reconnection_delay_max=20,
+        reconnection_delay_max=30,
     )
     tasks: set[asyncio.Task[None]] = set()
     stream_task: asyncio.Task[None] | None = None
@@ -1060,6 +1090,7 @@ async def run_agent(http_base: str, token: str | None) -> None:
             "agent:hello",
             {
                 "host": platform.node(),
+                "machineId": machine_id,
                 "os": platform.platform(),
                 "python": sys.version.split()[0],
                 "ts": time.time(),
@@ -1068,7 +1099,12 @@ async def run_agent(http_base: str, token: str | None) -> None:
         )
         await sio.emit(
             "agent:register",
-            {"role": "windows-shell-agent", "host": platform.node()},
+            {
+                "role": "windows-shell-agent",
+                "host": platform.node(),
+                "machineId": machine_id,
+                "userName": os.environ.get("USERNAME", ""),
+            },
             namespace="/console",
         )
 

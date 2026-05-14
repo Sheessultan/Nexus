@@ -5,6 +5,8 @@ import { io, type Socket } from 'socket.io-client';
 
 export type ConnState = 'idle' | 'connecting' | 'open' | 'error';
 
+export type AgentRosterEntry = { machineId: string; host: string };
+
 /** Exported for tests / callers that need the same rule as socket URL + transport selection. */
 export function isLoopbackHost(host: string): boolean {
   const h = host.toLowerCase();
@@ -114,12 +116,22 @@ function getConsoleSocketIoParams(): {
 export function useConsoleSocket() {
   const socketRef = useRef<Socket | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [conn, setConn] = useState<ConnState>('idle');
+  const [conn, setConn] = useState<ConnState>('connecting');
+  const [agents, setAgents] = useState<AgentRosterEntry[]>([]);
+  const [selectedMachineId, setSelectedMachineId] = useState<string | null>(null);
   const pendingRef = useRef(
     new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>(),
   );
 
+  const selectMachine = useCallback((machineId: string) => {
+    const s = socketRef.current;
+    if (!s?.connected) return;
+    s.emit('console:set_target', { machineId });
+    setSelectedMachineId(machineId);
+  }, []);
+
   useEffect(() => {
+    const pending = pendingRef.current;
     const { url, path, transports } = getConsoleSocketIoParams();
     const s = io(url, {
       path,
@@ -128,6 +140,15 @@ export function useConsoleSocket() {
       reconnectionDelay: 1000,
       reconnectionDelayMax: 10_000,
     });
+
+    const onRoster = (msg: { agents?: AgentRosterEntry[] }) => {
+      const list = Array.isArray(msg?.agents) ? msg.agents : [];
+      setAgents(list);
+      setSelectedMachineId((cur) => {
+        if (cur && list.some((a) => a.machineId === cur)) return cur;
+        return list[0]?.machineId ?? null;
+      });
+    };
 
     const onPortal = (msg: {
       requestId?: string;
@@ -147,6 +168,7 @@ export function useConsoleSocket() {
       p.resolve(msg.data);
     };
 
+    s.on('agents:roster', onRoster);
     s.on('connect', () => {
       socketRef.current = s;
       setSocket(s);
@@ -160,17 +182,24 @@ export function useConsoleSocket() {
     });
     s.on('portal:result', onPortal);
 
-    setConn('connecting');
-
     return () => {
+      s.off('agents:roster', onRoster);
       s.off('portal:result', onPortal);
       s.disconnect();
       socketRef.current = null;
-      pendingRef.current.clear();
+      pending.clear();
       setSocket(null);
+      setAgents([]);
+      setSelectedMachineId(null);
       setConn('idle');
     };
   }, []);
+
+  useEffect(() => {
+    const s = socketRef.current;
+    if (!s?.connected || !selectedMachineId) return;
+    s.emit('console:set_target', { machineId: selectedMachineId });
+  }, [socket, selectedMachineId]);
 
   const portalRequest = useCallback((type: string, payload?: Record<string, unknown>) => {
     const s = socketRef.current;
@@ -184,5 +213,5 @@ export function useConsoleSocket() {
     });
   }, []);
 
-  return { socket, conn, portalRequest };
+  return { socket, conn, portalRequest, agents, selectedMachineId, selectMachine };
 }

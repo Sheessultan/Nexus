@@ -62,7 +62,10 @@ export default function TerminalPanel({
   const sessionIdRef = useRef<string | null>(null);
   const isActiveRef = useRef(isActive);
   const resizeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  isActiveRef.current = isActive;
+
+  useEffect(() => {
+    isActiveRef.current = isActive;
+  }, [isActive]);
 
   useEffect(() => {
     if (!socket) return;
