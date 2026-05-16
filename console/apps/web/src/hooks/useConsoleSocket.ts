@@ -111,10 +111,13 @@ function getConsoleSocketIoParams(): {
   };
 }
 
+const PORTAL_TIMEOUT_MS = 30_000;
+
 export function useConsoleSocket() {
   const socketRef = useRef<Socket | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [conn, setConn] = useState<ConnState>('idle');
+  const [agentReady, setAgentReady] = useState(false);
   const pendingRef = useRef(
     new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>(),
   );
@@ -147,6 +150,16 @@ export function useConsoleSocket() {
       p.resolve(msg.data);
     };
 
+    const onLog = (msg: { line?: string }) => {
+      const line = msg?.line ?? '';
+      if (line.includes('Agent registered')) {
+        setAgentReady(true);
+      }
+      if (line.includes('Agent disconnected')) {
+        setAgentReady(false);
+      }
+    };
+
     s.on('connect', () => {
       socketRef.current = s;
       setSocket(s);
@@ -154,7 +167,11 @@ export function useConsoleSocket() {
     });
     s.on('disconnect', () => {
       setConn('idle');
+      setAgentReady(false);
     });
+    const onAgentReady = () => setAgentReady(true);
+    s.on('log:line', onLog);
+    s.on('agent:ready', onAgentReady);
     s.on('connect_error', () => {
       setConn('error');
     });
@@ -164,11 +181,14 @@ export function useConsoleSocket() {
 
     return () => {
       s.off('portal:result', onPortal);
+      s.off('log:line', onLog);
+      s.off('agent:ready', onAgentReady);
       s.disconnect();
       socketRef.current = null;
       pendingRef.current.clear();
       setSocket(null);
       setConn('idle');
+      setAgentReady(false);
     };
   }, []);
 
@@ -179,10 +199,28 @@ export function useConsoleSocket() {
     }
     const requestId = crypto.randomUUID();
     return new Promise<unknown>((resolve, reject) => {
-      pendingRef.current.set(requestId, { resolve, reject });
+      const timer = setTimeout(() => {
+        if (!pendingRef.current.has(requestId)) return;
+        pendingRef.current.delete(requestId);
+        reject(
+          new Error(
+            'Portal request timed out. Start the Windows agent (`py src\\main.py --api http://YOUR_IP:4000`) and click Retry.',
+          ),
+        );
+      }, PORTAL_TIMEOUT_MS);
+      pendingRef.current.set(requestId, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
       s.emit('portal:request', { requestId, type, payload });
     });
   }, []);
 
-  return { socket, conn, portalRequest };
+  return { socket, conn, agentReady, portalRequest };
 }

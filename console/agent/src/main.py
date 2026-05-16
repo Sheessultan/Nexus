@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 import socketio
 
-from pty_manager import PtyManager
+from pty_manager import PtyManager, pty_available
 
 _capture_lock = threading.Lock()
 
@@ -107,7 +107,16 @@ def _powershell_exe() -> str:
     return str(pathlib.Path(root) / "System32" / "WindowsPowerShell" / "v1.0" / "powershell.exe")
 
 
-_AGENT_ROOT = pathlib.Path(__file__).resolve().parent.parent
+def _agent_root() -> pathlib.Path:
+    """Dev: agent/ folder. Frozen exe: PyInstaller bundle (_MEIPASS)."""
+    if getattr(sys, "frozen", False):
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            return pathlib.Path(meipass)
+    return pathlib.Path(__file__).resolve().parent.parent
+
+
+_AGENT_ROOT = _agent_root()
 _PS_PARSE_SCRIPT = _AGENT_ROOT / "scripts" / "parse-ps-complete.ps1"
 
 
@@ -1230,6 +1239,54 @@ def _normalize_http_base(raw: str) -> str:
     return (raw or "").strip().rstrip("/")
 
 
+def _config_paths() -> list[pathlib.Path]:
+    paths = [_AGENT_ROOT / "console-agent.json"]
+    if getattr(sys, "frozen", False):
+        paths.insert(0, pathlib.Path(sys.executable).resolve().parent / "console-agent.json")
+    return paths
+
+
+def load_agent_config() -> dict[str, Any]:
+    for path in _config_paths():
+        if not path.is_file():
+            continue
+        try:
+            with path.open(encoding="utf-8") as fh:
+                data = json.load(fh)
+            if isinstance(data, dict):
+                return data
+        except (OSError, json.JSONDecodeError) as exc:
+            print(f"Warning: could not read {path}: {exc}", file=sys.stderr)
+    return {}
+
+
+def resolve_api_base(cli_api: str | None) -> str:
+    if cli_api:
+        return _normalize_http_base(cli_api)
+    env = os.environ.get("CONSOLE_API_BASE", "").strip()
+    if env:
+        return _normalize_http_base(env)
+    cfg = load_agent_config()
+    for key in ("apiUrl", "api_url", "api"):
+        val = cfg.get(key)
+        if val:
+            return _normalize_http_base(str(val))
+    return "http://127.0.0.1:4000"
+
+
+def resolve_agent_token(cli_token: str | None) -> str | None:
+    if cli_token:
+        return cli_token
+    env = os.environ.get("CONSOLE_AGENT_TOKEN", "").strip()
+    if env:
+        return env
+    tok = load_agent_config().get("token")
+    if tok is None:
+        return None
+    s = str(tok).strip()
+    return s or None
+
+
 def probe_api(api_base: str) -> None:
     try:
         base = _normalize_http_base(api_base)
@@ -1243,16 +1300,28 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="NEXUS INTELLIGENCE Windows agent")
     parser.add_argument(
         "--api",
-        default=os.environ.get("CONSOLE_API_BASE", "http://127.0.0.1:4000"),
-        help="HTTP origin of the Nest API (no path), e.g. http://192.168.1.10:4000 — same host you use in the browser for :4000",
+        default=None,
+        help="Nest API origin (no path). Overrides console-agent.json / CONSOLE_API_BASE.",
     )
     parser.add_argument(
         "--token",
-        default=os.environ.get("CONSOLE_AGENT_TOKEN"),
+        default=None,
         help="Bearer token for authenticated handshakes",
     )
     args = parser.parse_args()
-    args.api = _normalize_http_base(args.api)
+    args.api = resolve_api_base(args.api)
+    args.token = resolve_agent_token(args.token)
+    print(f"Connecting to API: {args.api}", flush=True)
+    print(
+        f"Capabilities: screen={'yes' if _HAS_SCREEN else 'no'}, "
+        f"terminal/ConPTY={'yes' if pty_available() else 'NO'}",
+        flush=True,
+    )
+    if not pty_available():
+        print(
+            "WARNING: CMD/PowerShell terminal needs pywinpty. Reinstall from latest ConsoleAgent-Setup.exe.",
+            file=sys.stderr,
+        )
 
     if platform.system().lower() != "windows":
         print("Warning: agent targets Windows; continuing for development.", file=sys.stderr)

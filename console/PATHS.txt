@@ -18,12 +18,13 @@ If "listen EADDRINUSE :::4000": port busy — stop the old Node/Nest process or 
   Then set apps\web\.env.local NEXT_PUBLIC_SOCKET_URL=http://localhost:4001/console
 
 Terminal → real shell on PC:
-  1) Backend + UI running as above
-  2) cd agent
-     py -m pip install -r requirements.txt
-     py src\main.py --api http://127.0.0.1:4000
-  UI terminal default = PowerShell. For CMD prefix: cmd: dir
-  Full notes: agent\README.md
+  LOCAL dev:
+    py src\main.py --api http://127.0.0.1:4000
+  LIVE AWS (web+api on server, agent on Windows laptop):
+    py src\main.py --api http://3.26.196.232:4000
+    or:  agent\start-live.ps1
+  Portal: http://3.26.196.232:3000
+  Full guide: LIVE-AWS.md
 
 UI: live terminal (xterm) only on the Terminal dock item; other tools use the portal panel (no terminal strip).
 

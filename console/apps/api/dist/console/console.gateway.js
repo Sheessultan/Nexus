@@ -106,6 +106,7 @@ let ConsoleGateway = class ConsoleGateway {
         this.server.emit('log:line', {
             line: `[console] Agent registered (socket ${client.id}).`,
         });
+        this.server.emit('agent:ready', { ok: true });
     }
     async terminalInput(client, body) {
         const raw = body?.data ?? '';

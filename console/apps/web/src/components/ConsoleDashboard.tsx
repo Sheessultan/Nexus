@@ -47,7 +47,7 @@ function explorerParentPath(p: string): string | null {
 }
 
 export default function ConsoleDashboard() {
-  const { socket, conn, portalRequest } = useConsoleSocket();
+  const { socket, conn, agentReady, portalRequest } = useConsoleSocket();
   const [path, setPath] = useState('');
   const [dirLoading, setDirLoading] = useState(false);
   const [drives, setDrives] = useState<Drive[]>([]);
@@ -101,11 +101,32 @@ export default function ConsoleDashboard() {
     isElevated?: boolean;
   };
 
+  const refreshSession = useCallback(async () => {
+    try {
+      const raw = await portalRequest('session_info');
+      const j = parseJson<SessionInfo>(raw);
+      const who =
+        j.whoami ||
+        `${j.userDomain || ''}\\${j.userName || ''}`.replace(/^\\+/, '').replace(/\\+$/, '');
+      const admin = j.isElevated ? ' (Administrator / elevated)' : '';
+      setAccountLine(`${who}${admin}`);
+      setMachineLine(`${j.host || ''} · ${j.home || ''}`);
+      setAgentElevated(Boolean(j.isElevated));
+    } catch {
+      setAccountLine(null);
+      setMachineLine(null);
+      setAgentElevated(false);
+    }
+  }, [portalRequest]);
+
   const refreshDrives = useCallback(async () => {
     try {
+      setExplorerError(null);
       const raw = await portalRequest('list_drives');
-      setDrives(parseJson<Drive[]>(raw));
+      const list = parseJson<Drive[]>(raw);
+      setDrives(Array.isArray(list) ? list : []);
     } catch (e) {
+      setDrives([]);
       setExplorerError(e instanceof Error ? e.message : String(e));
     }
   }, [portalRequest]);
@@ -192,36 +213,31 @@ export default function ConsoleDashboard() {
     [portalRequest, screenMonitor],
   );
 
-  useEffect(() => {
-    if (!socket) return;
-    void (async () => {
-      await refreshDrives();
-      setEntries([]);
-      setExplorerError(null);
-      await refreshApps();
-    })();
-  }, [socket, refreshDrives, refreshApps]);
+  const reloadAgentData = useCallback(async () => {
+    await refreshDrives();
+    setEntries([]);
+    await refreshApps();
+    await refreshSession();
+  }, [refreshDrives, refreshApps, refreshSession]);
 
   useEffect(() => {
-    if (!socket) return;
-    void (async () => {
-      try {
-        const raw = await portalRequest('session_info');
-        const j = parseJson<SessionInfo>(raw);
-        const who =
-          j.whoami ||
-          `${j.userDomain || ''}\\${j.userName || ''}`.replace(/^\\+/, '').replace(/\\+$/, '');
-        const admin = j.isElevated ? ' (Administrator / elevated)' : '';
-        setAccountLine(`${who}${admin}`);
-        setMachineLine(`${j.host || ''} · ${j.home || ''}`);
-        setAgentElevated(Boolean(j.isElevated));
-      } catch {
-        setAccountLine(null);
-        setMachineLine(null);
-        setAgentElevated(false);
-      }
-    })();
-  }, [socket, portalRequest]);
+    if (!socket || conn !== 'open') return;
+    void reloadAgentData();
+  }, [socket, conn, reloadAgentData]);
+
+  /** Browser often connects before the Windows agent registers — retry when agent comes online. */
+  useEffect(() => {
+    if (!socket || conn !== 'open' || !agentReady) return;
+    void reloadAgentData();
+  }, [socket, conn, agentReady, reloadAgentData]);
+
+  useEffect(() => {
+    if (!socket || conn !== 'open' || agentReady) return;
+    const t = window.setInterval(() => {
+      void reloadAgentData();
+    }, 4000);
+    return () => window.clearInterval(t);
+  }, [socket, conn, agentReady, reloadAgentData]);
 
   useEffect(() => {
     if (!socket) return;
@@ -809,11 +825,15 @@ export default function ConsoleDashboard() {
                           <div className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-xl border border-cyan-900/25 bg-black/20 px-4 py-8 text-center">
                             {drivesEmpty ? (
                               <>
+                                {explorerError ? (
+                                  <p className="mb-2 max-w-md text-xs text-rose-400">{explorerError}</p>
+                                ) : null}
                                 <p className="max-w-[18rem] text-xs leading-relaxed text-cyan-700/90">
-                                  No drives listed — connect the Windows agent, then reload. The drive column appears on the
-                                  left once volumes are available.
+                                  {agentReady
+                                    ? 'No drives from agent — click Retry or check the agent console.'
+                                    : 'Start agent on this PC: py src\\main.py --api http://3.26.196.232:4000'}
                                 </p>
-                                <button type="button" onClick={() => void refreshDrives()} className="cyber-btn mt-4 text-xs">
+                                <button type="button" onClick={() => void reloadAgentData()} className="cyber-btn mt-4 text-xs">
                                   Retry drives
                                 </button>
                               </>

@@ -122,6 +122,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     this.server.emit('log:line', {
       line: `[console] Agent registered (socket ${client.id}).`,
     });
+    this.server.emit('agent:ready', { ok: true });
   }
 
   @SubscribeMessage('terminal:input')
