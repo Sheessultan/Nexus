@@ -1,5 +1,0 @@
-python-socketio[asyncio_client]==5.13.0
-httpx==0.28.1
-mss==10.0.0
-Pillow==11.1.0
-pywinpty>=2.0.14; sys_platform == "win32"
