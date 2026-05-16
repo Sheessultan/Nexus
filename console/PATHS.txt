@@ -1,0 +1,33 @@
+Project root:  C:\Users\Administrator\Desktop\console   (apne machine par path badal lena)
+
+Frontend (Next.js):  apps\web
+Backend (NestJS):    apps\api
+Windows agent:       agent   (Python — yahan npm/package.json NAHI; pip + py src\main.py)
+
+Full setup + versions:  SETUP-AND-RUN.md
+
+Run backend:  cd apps\api  && npm run start:dev   (default port 4000)
+Run frontend: cd apps\web && npm run dev          (port 3000)
+
+Test login (PowerShell, API must be running):
+  cd apps\api
+  npm run login:test
+
+If "listen EADDRINUSE :::4000": port busy — stop the old Node/Nest process or use another port.
+  PowerShell: $env:PORT="4001"; npm run start:dev
+  Then set apps\web\.env.local NEXT_PUBLIC_SOCKET_URL=http://localhost:4001/console
+
+Terminal → real shell on PC:
+  LOCAL dev:
+    py src\main.py --api http://127.0.0.1:4000
+  LIVE AWS (web+api on server, agent on Windows laptop):
+    py src\main.py --api http://3.26.196.232:4000
+    or:  agent\start-live.ps1
+  Portal: http://3.26.196.232:3000
+  Full guide: LIVE-AWS.md
+
+UI: live terminal (xterm) only on the Terminal dock item; other tools use the portal panel (no terminal strip).
+
+Where to add APIs (REST + Socket.IO + portal types): docs\API.md
+
+IMPORTANT: agent folder mein "npm i" mat chalao — wahan package.json nahi hai by design.
