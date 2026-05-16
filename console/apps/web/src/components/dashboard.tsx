@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useCallback } from 'react';
+import { useState, useMemo } from 'react';
 import {
   Search,
   Terminal,
@@ -16,106 +16,59 @@ import {
 } from 'lucide-react';
 import BinaryRain from '@/components/BinaryRain';
 import ConsoleDashboard from '@/components/ConsoleDashboard';
-import type { ConsoleBoot } from '@/types/consoleBoot';
-
-type QuickToolDef = {
-  id: string;
-  label: string;
-  icon: typeof Terminal;
-  desc: string;
-  color: string;
-};
-
-const LANDING_QUICK_TOOLS: QuickToolDef[] = [
-  {
-    id: 'terminal',
-    label: 'Terminal',
-    icon: Terminal,
-    desc: 'Interactive shell access',
-    color: 'cyan',
-  },
-  {
-    id: 'shield',
-    label: 'Security',
-    icon: Shield,
-    desc: 'System security audit',
-    color: 'emerald',
-  },
-  {
-    id: 'zap',
-    label: 'Performance',
-    icon: Zap,
-    desc: 'Real-time metrics',
-    color: 'amber',
-  },
-  {
-    id: 'network',
-    label: 'Network',
-    icon: Network,
-    desc: 'Network diagnostics',
-    color: 'blue',
-  },
-  {
-    id: 'database',
-    label: 'Storage',
-    icon: Database,
-    desc: 'Disk & storage info',
-    color: 'purple',
-  },
-  {
-    id: 'settings',
-    label: 'System',
-    icon: Settings,
-    desc: 'System configuration',
-    color: 'rose',
-  },
-];
 
 export default function Dashboard() {
   const [searchQuery, setSearchQuery] = useState('');
   const [showConsole, setShowConsole] = useState(false);
-  const [consoleBoot, setConsoleBoot] = useState<ConsoleBoot | undefined>(undefined);
-  const [consoleSessionKey, setConsoleSessionKey] = useState(0);
 
-  const openConsoleFullscreen = useCallback((boot?: ConsoleBoot) => {
-    if (typeof document === 'undefined') return;
-    void (async () => {
-      try {
-        const el = document.documentElement;
-        if (document.fullscreenElement !== el) {
-          await el.requestFullscreen();
-        }
-      } catch {
-        /* Browser may block without gesture; console still opens */
-      }
-      setConsoleBoot(boot ?? { leftTab: 'explorer' });
-      setConsoleSessionKey((k) => k + 1);
-      setShowConsole(true);
-    })();
-  }, []);
-
-  const toolBoot = (id: string): ConsoleBoot => {
-    switch (id) {
-      case 'terminal':
-        return { terminalFocus: true };
-      case 'shield':
-        return { opsPortal: { type: 'firewall_profiles', label: 'Firewall profiles' } };
-      case 'zap':
-        return { opsPortal: { type: 'process_list_brief', label: 'Processes' } };
-      case 'network':
-        return { opsPortal: { type: 'network_info', label: 'Network (ipconfig)' } };
-      case 'database':
-        return { leftTab: 'explorer' };
-      case 'settings':
-        return { opsPortal: { type: 'system_info', label: 'System (OS / hardware)' } };
-      default:
-        return { leftTab: 'explorer' };
-    }
-  };
+  const quickTools = [
+    {
+      id: 'terminal',
+      label: 'Terminal',
+      icon: Terminal,
+      desc: 'Interactive shell access',
+      color: 'cyan',
+    },
+    {
+      id: 'shield',
+      label: 'Security',
+      icon: Shield,
+      desc: 'System security audit',
+      color: 'emerald',
+    },
+    {
+      id: 'zap',
+      label: 'Performance',
+      icon: Zap,
+      desc: 'Real-time metrics',
+      color: 'amber',
+    },
+    {
+      id: 'network',
+      label: 'Network',
+      icon: Network,
+      desc: 'Network diagnostics',
+      color: 'blue',
+    },
+    {
+      id: 'database',
+      label: 'Storage',
+      icon: Database,
+      desc: 'Disk & storage info',
+      color: 'purple',
+    },
+    {
+      id: 'settings',
+      label: 'System',
+      icon: Settings,
+      desc: 'System configuration',
+      color: 'rose',
+    },
+  ];
 
   const filteredTools = useMemo(() => {
-    if (!searchQuery.trim()) return LANDING_QUICK_TOOLS;
-    return LANDING_QUICK_TOOLS.filter(
+    if (!searchQuery.trim()) return quickTools;
+    return quickTools.filter(
       (tool) =>
         tool.label.toLowerCase().includes(searchQuery.toLowerCase()) ||
         tool.desc.toLowerCase().includes(searchQuery.toLowerCase()),
@@ -123,11 +76,11 @@ export default function Dashboard() {
   }, [searchQuery]);
 
   if (showConsole) {
-    return <ConsoleDashboard key={consoleSessionKey} boot={consoleBoot} />;
+    return <ConsoleDashboard />;
   }
 
   return (
-    <div className="relative min-h-screen w-full overflow-hidden bg-zinc-950">
+    <div className="relative min-h-screen w-full bg-gradient-to-br from-black via-zinc-950 to-black overflow-hidden">
       <BinaryRain />
 
       {/* Grid background */}
@@ -143,7 +96,7 @@ export default function Dashboard() {
       {/* Main content */}
       <div className="relative z-[2] flex flex-col min-h-screen">
         {/* Header */}
-        <header className="sticky top-0 z-40 border-b border-cyan-900/30 bg-zinc-950/95 shadow-[0_8px_32px_rgba(0,0,0,0.5)] backdrop-blur-xl">
+        <header className="border-b border-cyan-500/20 backdrop-blur-xl bg-black/40 sticky top-0 z-40 shadow-[0_8px_32px_rgba(0,0,0,0.35)]">
           <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
             <div className="flex items-start justify-between gap-4 mb-6">
               <div>
@@ -182,8 +135,8 @@ export default function Dashboard() {
         {/* Main content area */}
         <main className="flex-1 max-w-7xl mx-auto w-full px-4 sm:px-6 lg:px-8 py-8 md:py-12">
           {/* Stats */}
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-3 md:gap-4 mb-12">
-            <div className="group cursor-default rounded-xl border border-cyan-900/35 bg-zinc-950/90 p-4 shadow-inner transition-all duration-300 hover:border-cyan-700/40">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-12">
+            <div className="group p-4 rounded-xl border border-cyan-500/20 bg-black/40 hover:bg-cyan-500/5 transition-all duration-300 cursor-default">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-semibold uppercase tracking-wider text-cyan-400/80">
                   System Status
@@ -194,18 +147,18 @@ export default function Dashboard() {
               <p className="text-xs text-cyan-700/80">All systems nominal</p>
             </div>
 
-            <div className="group cursor-default rounded-xl border border-emerald-900/35 bg-zinc-950/90 p-4 shadow-inner transition-all duration-300 hover:border-emerald-700/40">
+            <div className="group p-4 rounded-xl border border-emerald-500/20 bg-black/40 hover:bg-emerald-500/5 transition-all duration-300 cursor-default">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-semibold uppercase tracking-wider text-emerald-400/80">
                   Active Sessions
                 </span>
                 <Zap className="w-4 h-4 text-emerald-400" />
               </div>
-              <p className="text-2xl font-bold text-emerald-200 mb-1">—</p>
-              <p className="text-xs text-emerald-700/80">Open console to see agents</p>
+              <p className="text-2xl font-bold text-emerald-200 mb-1">1</p>
+              <p className="text-xs text-emerald-700/80">Connected & ready</p>
             </div>
 
-            <div className="group cursor-default rounded-xl border border-amber-900/35 bg-zinc-950/90 p-4 shadow-inner transition-all duration-300 hover:border-amber-700/40">
+            <div className="group p-4 rounded-xl border border-amber-500/20 bg-black/40 hover:bg-amber-500/5 transition-all duration-300 cursor-default">
               <div className="flex items-center justify-between mb-3">
                 <span className="text-xs font-semibold uppercase tracking-wider text-amber-400/80">
                   Network Uptime
@@ -252,8 +205,8 @@ export default function Dashboard() {
                   return (
                     <button
                       key={tool.id}
-                      onClick={() => openConsoleFullscreen(toolBoot(tool.id))}
-                      className={`group/card relative overflow-hidden rounded-xl border bg-zinc-950/80 p-5 text-left transition-all duration-300 ${colorClasses[tool.color as keyof typeof colorClasses]}`}
+                      onClick={() => setShowConsole(true)}
+                      className={`group/card relative p-5 rounded-xl border bg-black/30 transition-all duration-300 text-left overflow-hidden ${colorClasses[tool.color as keyof typeof colorClasses]}`}
                     >
                       <div className="absolute inset-0 bg-gradient-to-br from-white/0 to-white/0 group-hover/card:from-white/5 group-hover/card:to-white/0 transition-all" />
                       <div className="relative">
@@ -276,16 +229,16 @@ export default function Dashboard() {
             ) : (
               <div className="p-8 rounded-xl border border-cyan-500/20 bg-black/30 text-center">
                 <p className="text-cyan-700/80 text-sm">
-                  No tools match &quot;{searchQuery}&quot;. Try another search or clear to see all.
+                  No tools match "{searchQuery}". Try another search or clear to see all.
                 </p>
               </div>
             )}
           </div>
 
           {/* Launch Console */}
-              <div className="mb-8 rounded-xl border border-cyan-900/30 bg-zinc-950/80 p-1 shadow-[0_0_40px_rgba(0,0,0,0.45)]">
+          <div className="mb-8">
             <button
-              onClick={() => openConsoleFullscreen({ leftTab: 'explorer' })}
+              onClick={() => setShowConsole(true)}
               className="w-full group relative px-6 py-4 rounded-xl border border-emerald-500/50 bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 hover:from-emerald-500/30 hover:to-cyan-500/30 transition-all duration-300 overflow-hidden"
             >
               <div className="absolute inset-0 bg-gradient-to-r from-emerald-500/0 via-white/5 to-emerald-500/0 group-hover:from-emerald-500/10 group-hover:via-white/10 group-hover:to-emerald-500/10 transition-all" />

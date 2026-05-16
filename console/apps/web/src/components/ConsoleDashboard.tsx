@@ -4,7 +4,6 @@ import * as Tabs from '@radix-ui/react-tabs';
 import {
   ChevronLeft,
   ChevronRight,
-  ClipboardList,
   FolderOpen,
   HardDrive,
   LayoutGrid,
@@ -19,9 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConsoleSocket } from '@/hooks/useConsoleSocket';
 import TerminalPanel from '@/components/TerminalPanel';
 import QuickToolsPanel from '@/components/QuickToolsPanel';
-import ConsoleHomePanel from '@/components/ConsoleHomePanel';
-import { OPS_PORTAL_ACTIONS } from '@/data/opsPortalActions';
-import type { ConsoleBoot, ConsoleLeftTab } from '@/types/consoleBoot';
+import Dashboard from '@/components/dashboard';
 
 type Drive = { letter: string; path: string; freeGb: number | null };
 type DirEntry = { name: string; isDir: boolean; size: number | null };
@@ -49,8 +46,8 @@ function explorerParentPath(p: string): string | null {
   return `${parent}\\`;
 }
 
-export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }) {
-  const { socket, conn, portalRequest, agents, selectedMachineId, selectMachine } = useConsoleSocket();
+export default function ConsoleDashboard() {
+  const { socket, conn, agentReady, portalRequest } = useConsoleSocket();
   const [path, setPath] = useState('');
   const [dirLoading, setDirLoading] = useState(false);
   const [drives, setDrives] = useState<Drive[]>([]);
@@ -74,6 +71,7 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
   /** mss monitor index: 1 = first physical display (see python mss monitors). */
   const [screenMonitor, setScreenMonitor] = useState(1);
   const screenMonitorRef = useRef(screenMonitor);
+  screenMonitorRef.current = screenMonitor;
   const lastFrameSeq = useRef(0);
   const liveWatchdog = useRef<ReturnType<typeof setInterval> | null>(null);
   const gotLiveFrame = useRef(false);
@@ -84,21 +82,11 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
     { index: 1, width: 0, height: 0, label: 'Display 1' },
   ]);
   const autoMonitorPickDone = useRef(false);
-
-  useEffect(() => {
-    autoMonitorPickDone.current = false;
-  }, [selectedMachineId]);
-
-  useEffect(() => {
-    screenMonitorRef.current = screenMonitor;
-  }, [screenMonitor]);
-
   const [shellTab, setShellTab] = useState<'powershell' | 'cmd'>('powershell');
   const [agentElevated, setAgentElevated] = useState(false);
-  const [leftTab, setLeftTab] = useState<ConsoleLeftTab>('explorer');
+  const [leftTab, setLeftTab] = useState<'explorer' | 'apps' | 'screen' | 'tools' | 'dashboard'>('explorer');
+  const terminalSectionRef = useRef<HTMLDivElement>(null);
   const [sideLog, setSideLog] = useState<string | null>(null);
-  const [opsLogTitle, setOpsLogTitle] = useState<string | null>(null);
-  const bootAppliedRef = useRef(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [terminalFocus, setTerminalFocus] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
@@ -113,11 +101,32 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
     isElevated?: boolean;
   };
 
+  const refreshSession = useCallback(async () => {
+    try {
+      const raw = await portalRequest('session_info');
+      const j = parseJson<SessionInfo>(raw);
+      const who =
+        j.whoami ||
+        `${j.userDomain || ''}\\${j.userName || ''}`.replace(/^\\+/, '').replace(/\\+$/, '');
+      const admin = j.isElevated ? ' (Administrator / elevated)' : '';
+      setAccountLine(`${who}${admin}`);
+      setMachineLine(`${j.host || ''} · ${j.home || ''}`);
+      setAgentElevated(Boolean(j.isElevated));
+    } catch {
+      setAccountLine(null);
+      setMachineLine(null);
+      setAgentElevated(false);
+    }
+  }, [portalRequest]);
+
   const refreshDrives = useCallback(async () => {
     try {
+      setExplorerError(null);
       const raw = await portalRequest('list_drives');
-      setDrives(parseJson<Drive[]>(raw));
+      const list = parseJson<Drive[]>(raw);
+      setDrives(Array.isArray(list) ? list : []);
     } catch (e) {
+      setDrives([]);
       setExplorerError(e instanceof Error ? e.message : String(e));
     }
   }, [portalRequest]);
@@ -204,39 +213,34 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
     [portalRequest, screenMonitor],
   );
 
+  const reloadAgentData = useCallback(async () => {
+    await refreshDrives();
+    setEntries([]);
+    await refreshApps();
+    await refreshSession();
+  }, [refreshDrives, refreshApps, refreshSession]);
+
+  useEffect(() => {
+    if (!socket || conn !== 'open') return;
+    void reloadAgentData();
+  }, [socket, conn, reloadAgentData]);
+
+  /** Browser often connects before the Windows agent registers — retry when agent comes online. */
+  useEffect(() => {
+    if (!socket || conn !== 'open' || !agentReady) return;
+    void reloadAgentData();
+  }, [socket, conn, agentReady, reloadAgentData]);
+
+  useEffect(() => {
+    if (!socket || conn !== 'open' || agentReady) return;
+    const t = window.setInterval(() => {
+      void reloadAgentData();
+    }, 4000);
+    return () => window.clearInterval(t);
+  }, [socket, conn, agentReady, reloadAgentData]);
+
   useEffect(() => {
     if (!socket) return;
-    void (async () => {
-      await refreshDrives();
-      setEntries([]);
-      setExplorerError(null);
-      await refreshApps();
-    })();
-  }, [socket, selectedMachineId, refreshDrives, refreshApps]);
-
-  useEffect(() => {
-    if (!socket || !selectedMachineId) return;
-    void (async () => {
-      try {
-        const raw = await portalRequest('session_info');
-        const j = parseJson<SessionInfo>(raw);
-        const who =
-          j.whoami ||
-          `${j.userDomain || ''}\\${j.userName || ''}`.replace(/^\\+/, '').replace(/\\+$/, '');
-        const admin = j.isElevated ? ' (Administrator / elevated)' : '';
-        setAccountLine(`${who}${admin}`);
-        setMachineLine(`${j.host || ''} · ${j.home || ''}`);
-        setAgentElevated(Boolean(j.isElevated));
-      } catch {
-        setAccountLine(null);
-        setMachineLine(null);
-        setAgentElevated(false);
-      }
-    })();
-  }, [socket, selectedMachineId, portalRequest]);
-
-  useEffect(() => {
-    if (!socket || !selectedMachineId) return;
     void (async () => {
       try {
         const raw = await portalRequest('list_monitors_json');
@@ -253,7 +257,7 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
         /* agent older than list_monitors_json — keep 1..4 UI */
       }
     })();
-  }, [socket, selectedMachineId, portalRequest]);
+  }, [socket, portalRequest]);
 
   useEffect(() => {
     if (!socket) return;
@@ -360,12 +364,12 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
       };
     }
     return undefined;
-  }, [socket, liveDesktop, selectedMachineId, portalRequest, captureScreen]);
+  }, [socket, liveDesktop, portalRequest, captureScreen]);
 
   useEffect(() => {
     if (!socket?.connected || !liveDesktop) return;
     socket.emit('screen:control', { action: 'start', fps: 4, monitor: screenMonitor });
-  }, [socket, liveDesktop, screenMonitor, selectedMachineId]);
+  }, [socket, liveDesktop, screenMonitor]);
 
   const breadcrumb = useMemo(() => {
     if (!path.trim()) return [];
@@ -431,44 +435,18 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
     [portalRequest, screenMeta],
   );
 
-  const runOpsFromMenu = useCallback(
-    async (type: string, label: string, payload?: Record<string, unknown>) => {
-      setTerminalFocus(false);
-      setLeftTab('operations');
-      setOpsLogTitle(label);
+  const runSidePortal = useCallback(
+    async (type: string, payload?: Record<string, unknown>) => {
       setSideLog('…');
       try {
         const raw = await portalRequest(type, payload);
-        setSideLog(String(raw).slice(0, 24_000));
+        setSideLog(String(raw).slice(0, 16000));
       } catch (e) {
         setSideLog(e instanceof Error ? e.message : String(e));
       }
     },
     [portalRequest],
   );
-
-  useEffect(() => {
-    if (!boot || bootAppliedRef.current) return;
-    const id = requestAnimationFrame(() => {
-      if (!boot || bootAppliedRef.current) return;
-      if (boot.terminalFocus) {
-        bootAppliedRef.current = true;
-        setTerminalFocus(true);
-        return;
-      }
-      if (!socket?.connected) return;
-      if (boot.opsPortal && !selectedMachineId) return;
-      bootAppliedRef.current = true;
-      if (boot.opsPortal) {
-        void runOpsFromMenu(boot.opsPortal.type, boot.opsPortal.label, boot.opsPortal.payload);
-        return;
-      }
-      if (boot.leftTab) {
-        setLeftTab(boot.leftTab);
-      }
-    });
-    return () => cancelAnimationFrame(id);
-  }, [boot, socket?.connected, selectedMachineId, runOpsFromMenu]);
 
   useEffect(() => {
     const tick = () => {
@@ -553,17 +531,6 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
         </button>
         <button
           type="button"
-          title="Operations & diagnostics"
-          className={navBtn(leftTab === 'operations', 'text-cyan-100/85')}
-          onClick={() => {
-            setLeftTab('operations');
-            pick();
-          }}
-        >
-          {compact ? <ClipboardList className="h-4 w-4 text-cyan-200" /> : 'Operations'}
-        </button>
-        <button
-          type="button"
           title="Terminal workspace"
           className={navBtn(false, 'mt-1 border border-cyan-800/50 text-cyan-200/90 hover:border-cyan-500/40')}
           onClick={() => {
@@ -590,7 +557,7 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
               if (terminalFocus) {
                 setTerminalFocus(false);
               }
-              setLeftTab('operations');
+              setLeftTab('tools');
             }}
           >
             <Wrench className="h-4 w-4" />
@@ -604,23 +571,48 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
           Ops
         </p>
         <div className="cyber-scroll flex max-h-[42vh] flex-col gap-1 overflow-y-auto pr-1">
-          {OPS_PORTAL_ACTIONS.map((a) => (
+          {(
+            [
+              ['query_user_sessions', 'Users / sessions (query)'],
+              ['process_list_brief', 'Processes'],
+              ['services_brief', 'Services'],
+              ['startup_entries', 'Startup (Run keys)'],
+              ['net_share_list', 'Shares (net)'],
+              ['firewall_profiles', 'Firewall profiles'],
+              ['network_info', 'Network (ipconfig)'],
+              ['logs_tail', 'Event log (sample)'],
+              ['tasks_list', 'Scheduled tasks'],
+              ['diskpart_list_disk', 'Diskpart list disk'],
+            ] as const
+          ).map(([t, label]) => (
             <button
-              key={a.type + (a.payload?.name ? String(a.payload.name) : '')}
+              key={t}
               type="button"
               className="cyber-nav-btn py-1.5 text-[10px] leading-tight text-emerald-200/85"
               onClick={() => {
                 if (terminalFocus) {
                   setTerminalFocus(false);
                 }
-                void runOpsFromMenu(a.type, a.label, a.payload);
+                void runSidePortal(t);
               }}
             >
-              {a.label}
+              {label}
             </button>
           ))}
+          <button
+            type="button"
+            className="cyber-nav-btn py-1.5 text-[10px] text-cyan-200/90"
+            onClick={() => {
+              if (terminalFocus) {
+                setTerminalFocus(false);
+              }
+              void runSidePortal('open_mmc', { name: 'devmgmt.msc' });
+            }}
+          >
+            Device Manager
+          </button>
         </div>
-        {sideLog && leftTab !== 'operations' ? (
+        {sideLog ? (
           <pre className="cyber-scroll mt-1 max-h-40 shrink-0 overflow-auto rounded-lg border border-emerald-500/20 bg-black/70 p-2 text-[9px] leading-snug text-emerald-100/90">
             {sideLog}
           </pre>
@@ -659,31 +651,6 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
         >
           {conn === 'open' ? 'Online' : conn === 'connecting' ? 'Connecting' : 'Offline'}
         </span>
-        <label className="flex min-w-0 max-w-[min(100vw-12rem,22rem)] shrink-0 items-center gap-1.5">
-          <span className="hidden text-[9px] font-semibold uppercase tracking-wide text-cyan-600/90 sm:inline">
-            Machine
-          </span>
-          <select
-            title="Choose which PC the console controls"
-            className="cyber-input max-w-full min-w-0 flex-1 py-1 text-[10px] font-medium sm:text-xs"
-            value={selectedMachineId ?? ''}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (v) selectMachine(v);
-            }}
-            disabled={!socket?.connected || agents.length === 0}
-          >
-            {agents.length === 0 ? (
-              <option value="">No agents online</option>
-            ) : (
-              agents.map((a) => (
-                <option key={a.machineId} value={a.machineId}>
-                  {a.host} ({a.machineId.slice(0, 8)}…)
-                </option>
-              ))
-            )}
-          </select>
-        </label>
         <span className="hidden min-w-0 truncate text-[10px] text-cyan-700/95 md:inline lg:max-w-[14rem]">
           {shellTab === 'powershell' ? 'PS' : 'CMD'} · {accountLine ?? '—'}
         </span>
@@ -752,40 +719,31 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
               <section className="flex min-h-0 flex-col gap-3 lg:col-span-12">
                 <Tabs.Root
                   value={leftTab}
-                  onValueChange={(v) => setLeftTab(v as ConsoleLeftTab)}
+                  onValueChange={(v) => setLeftTab(v as 'explorer' | 'apps' | 'screen' | 'tools' | 'dashboard')}
                   className="cyber-panel flex min-h-[min(480px,calc(100dvh-10rem))] flex-1 flex-col overflow-hidden"
                 >
                   <Tabs.List className="flex shrink-0 flex-wrap gap-1 border-b border-cyan-500/20 bg-black/40 p-1 lg:hidden">
-                    {(['dashboard', 'explorer', 'apps', 'screen', 'tools', 'operations'] as const).map((v) => (
+                    {(['dashboard', 'explorer', 'apps', 'screen', 'tools'] as const).map((v) => (
                       <Tabs.Trigger
                         key={v}
                         value={v}
                         className="min-w-0 flex-1 rounded-md px-2 py-2 text-xs font-medium text-cyan-200/50 transition-colors data-[state=active]:bg-cyan-500/15 data-[state=active]:text-cyan-50 data-[state=active]:shadow-[0_0_16px_rgba(0,240,255,0.12)] md:px-3 md:text-sm"
                       >
                         {v === 'dashboard'
-                          ? 'Home'
+                          ? 'Dashboard'
                           : v === 'explorer'
                             ? 'Drives & files'
                             : v === 'apps'
                               ? 'Programs'
                               : v === 'screen'
                                 ? 'Desktop view'
-                                : v === 'tools'
-                                  ? 'Quick tools'
-                                  : 'Operations'}
+                                : 'Quick tools'}
                       </Tabs.Trigger>
                     ))}
                   </Tabs.List>
 
                   <Tabs.Content value="dashboard" className="flex flex-1 flex-col p-3">
-                    <ConsoleHomePanel
-                      onOpenTab={(t) => setLeftTab(t)}
-                      onOpenTerminal={() => {
-                        setTerminalFocus(true);
-                        setMobileNavOpen(false);
-                      }}
-                      onRunOps={(type, label, payload) => void runOpsFromMenu(type, label, payload)}
-                    />
+                    <Dashboard />
                   </Tabs.Content>
 
                   <Tabs.Content value="explorer" className="flex min-h-0 flex-1 flex-col gap-2 p-3">
@@ -867,11 +825,15 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
                           <div className="flex min-h-0 flex-1 flex-col items-center justify-center rounded-xl border border-cyan-900/25 bg-black/20 px-4 py-8 text-center">
                             {drivesEmpty ? (
                               <>
+                                {explorerError ? (
+                                  <p className="mb-2 max-w-md text-xs text-rose-400">{explorerError}</p>
+                                ) : null}
                                 <p className="max-w-[18rem] text-xs leading-relaxed text-cyan-700/90">
-                                  No drives listed — connect the Windows agent, then reload. The drive column appears on the
-                                  left once volumes are available.
+                                  {agentReady
+                                    ? 'No drives from agent — click Retry or check the agent console.'
+                                    : 'Start agent on this PC: py src\\main.py --api http://3.26.196.232:4000'}
                                 </p>
-                                <button type="button" onClick={() => void refreshDrives()} className="cyber-btn mt-4 text-xs">
+                                <button type="button" onClick={() => void reloadAgentData()} className="cyber-btn mt-4 text-xs">
                                   Retry drives
                                 </button>
                               </>
@@ -1057,52 +1019,8 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
                     </div>
                   </Tabs.Content>
 
-                  <Tabs.Content value="tools" className="flex min-h-0 flex-1 flex-col bg-zinc-950/40">
+                  <Tabs.Content value="tools" className="flex min-h-0 flex-1 flex-col">
                     <QuickToolsPanel socket={socket} conn={conn} />
-                  </Tabs.Content>
-
-                  <Tabs.Content value="operations" className="flex min-h-0 flex-1 flex-col gap-0 overflow-hidden bg-zinc-950/50 p-3">
-                    <div className="flex min-h-0 flex-1 flex-col gap-3 lg:flex-row">
-                      <aside className="flex max-h-[40vh] shrink-0 flex-col gap-1.5 overflow-y-auto rounded-xl border border-emerald-900/35 bg-black/50 p-2 lg:max-h-none lg:w-56 lg:shrink-0">
-                        <p className="border-b border-emerald-800/40 pb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
-                          Ops
-                        </p>
-                        <div className="flex flex-col gap-0.5">
-                          {OPS_PORTAL_ACTIONS.map((a) => (
-                            <button
-                              key={a.type + String(a.payload?.name ?? '')}
-                              type="button"
-                              disabled={conn !== 'open' || !selectedMachineId}
-                              className="rounded-lg border border-transparent px-2 py-1.5 text-left text-[11px] font-medium text-emerald-100/90 transition-colors hover:border-emerald-500/35 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-40"
-                              onClick={() => void runOpsFromMenu(a.type, a.label, a.payload)}
-                            >
-                              {a.label}
-                            </button>
-                          ))}
-                        </div>
-                      </aside>
-                      <div className="flex min-h-0 min-w-0 flex-1 flex-col rounded-xl border border-cyan-900/30 bg-black/45">
-                        <div className="shrink-0 border-b border-cyan-900/35 px-3 py-2">
-                          <p className="text-[10px] font-semibold uppercase tracking-wide text-cyan-600/90">Output</p>
-                          <p className="truncate text-xs font-medium text-cyan-100/90">
-                            {opsLogTitle ?? 'Pick an operation — results appear here.'}
-                          </p>
-                        </div>
-                        <div className="cyber-scroll flex min-h-0 flex-1 items-stretch p-2">
-                          {sideLog ? (
-                            <pre className="w-full whitespace-pre-wrap break-words rounded-lg bg-black/60 p-3 font-mono text-[11px] leading-relaxed text-emerald-100/90">
-                              {sideLog}
-                            </pre>
-                          ) : (
-                            <div className="flex flex-1 flex-col items-center justify-center px-4 py-12 text-center">
-                              <p className="max-w-sm text-sm text-cyan-600/95">
-                                Choose an operation from the Ops list. Results load from the selected Windows agent.
-                              </p>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                    </div>
                   </Tabs.Content>
 
                   <Tabs.Content value="screen" className="flex min-h-0 flex-1 flex-col gap-3 p-3">
@@ -1159,8 +1077,6 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
                             : 'min-h-[min(360px,calc(100dvh-20rem))] flex-1'
                             }`}
                         >
-                          {/* Base64 desktop stream — next/image not applicable */}
-                          {/* eslint-disable-next-line @next/next/no-img-element */}
                           <img
                             src={screenSrc}
                             alt="Desktop snapshot"
@@ -1239,7 +1155,7 @@ export default function ConsoleDashboard({ boot }: { boot?: ConsoleBoot | null }
               </div>
               <div className="relative flex min-h-0 flex-1 flex-col">
                 <TerminalPanel
-                  key={`${selectedMachineId ?? 'none'}-${shellTab}`}
+                  key={shellTab}
                   socket={socket}
                   conn={conn}
                   portalRequest={portalRequest}

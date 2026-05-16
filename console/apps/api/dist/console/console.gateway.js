@@ -21,58 +21,27 @@ const ps_script_complete_1 = require("./ps-script-complete");
 let ConsoleGateway = class ConsoleGateway {
     constructor(powershellParser) {
         this.powershellParser = powershellParser;
-        this.agents = new Map();
+        this.agentSocketId = null;
         this.shellWaiters = new Map();
         this.portalWaiters = new Map();
         this.psParseWaiters = new Map();
         this.terminalLineBuffers = new Map();
     }
-    viewerRoom(machineId) {
-        return `viewer:${machineId}`;
-    }
     bufferKey(clientId, shell) {
         return `${clientId}:${shell}`;
     }
-    buildRosterPayload() {
-        const agents = [...this.agents.entries()].map(([machineId, v]) => ({
-            machineId,
-            host: v.host,
-        }));
-        return { agents };
-    }
-    broadcastRoster() {
-        this.server.emit('agents:roster', this.buildRosterPayload());
-    }
-    handleConnection(client) {
-        client.emit('agents:roster', this.buildRosterPayload());
-    }
-    clearPsParseWaitersForAgent(agentSocketId, reason) {
+    clearPsParseWaiters(reason) {
         const err = new Error(reason);
-        for (const [rid, w] of [...this.psParseWaiters.entries()]) {
-            if (w.agentSocketId !== agentSocketId)
-                continue;
+        for (const [, w] of this.psParseWaiters) {
             clearTimeout(w.timer);
             w.reject(err);
-            this.psParseWaiters.delete(rid);
         }
+        this.psParseWaiters.clear();
     }
-    effectiveMachineId(client) {
-        const chosen = client.data.targetMachineId;
-        if (chosen && this.agents.has(chosen)) {
-            return chosen;
+    async waitAgentPsParse(text) {
+        if (!this.agentSocketId) {
+            throw new Error('No agent');
         }
-        if (this.agents.size === 1) {
-            return [...this.agents.keys()][0];
-        }
-        return null;
-    }
-    getAgentSocketIdForBrowser(client) {
-        const mid = this.effectiveMachineId(client);
-        if (!mid)
-            return null;
-        return this.agents.get(mid)?.socketId ?? null;
-    }
-    async waitAgentPsParse(agentSocketId, text) {
         return await new Promise((resolve, reject) => {
             const rid = (0, crypto_1.randomUUID)();
             const timer = setTimeout(() => {
@@ -80,7 +49,6 @@ let ConsoleGateway = class ConsoleGateway {
                 reject(new Error('PowerShell parse request timed out'));
             }, 14_000);
             this.psParseWaiters.set(rid, {
-                agentSocketId,
                 resolve: (v) => {
                     clearTimeout(timer);
                     this.psParseWaiters.delete(rid);
@@ -93,10 +61,10 @@ let ConsoleGateway = class ConsoleGateway {
                 },
                 timer,
             });
-            this.server.to(agentSocketId).emit('agent:powershell_parse', { requestId: rid, text });
+            this.server.to(this.agentSocketId).emit('agent:powershell_parse', { requestId: rid, text });
         });
     }
-    async resolvePowershellComplete(merged, agentSocketId) {
+    async resolvePowershellComplete(merged) {
         if (this.powershellParser.isAvailable()) {
             try {
                 return await this.powershellParser.isSyntacticallyComplete(merged);
@@ -104,9 +72,9 @@ let ConsoleGateway = class ConsoleGateway {
             catch {
             }
         }
-        if (agentSocketId) {
+        if (this.agentSocketId) {
             try {
-                return await this.waitAgentPsParse(agentSocketId, merged);
+                return await this.waitAgentPsParse(merged);
             }
             catch {
             }
@@ -114,20 +82,13 @@ let ConsoleGateway = class ConsoleGateway {
         return (0, ps_script_complete_1.isPowershellScriptComplete)(merged);
     }
     handleDisconnect(client) {
-        if (client.data.isAgent === true && typeof client.data.machineId === 'string') {
-            const mid = client.data.machineId;
-            const cur = this.agents.get(mid);
-            if (cur?.socketId === client.id) {
-                this.agents.delete(mid);
-                this.broadcastRoster();
-            }
-            this.clearPsParseWaitersForAgent(client.id, 'Agent disconnected');
-            this.server.emit('log:line', { line: `[console] Agent disconnected (${mid}).` });
+        if (this.agentSocketId === client.id) {
+            this.agentSocketId = null;
+            this.clearPsParseWaiters('Agent disconnected');
+            this.server.emit('log:line', { line: '[console] Agent disconnected.' });
         }
-        else {
-            for (const a of this.agents.values()) {
-                this.server.to(a.socketId).emit('agent:pty_client_gone', { clientId: client.id });
-            }
+        else if (this.agentSocketId) {
+            this.server.to(this.agentSocketId).emit('agent:pty_client_gone', { clientId: client.id });
         }
         const prefix = `${client.id}:`;
         for (const k of [...this.terminalLineBuffers.keys()]) {
@@ -138,42 +99,14 @@ let ConsoleGateway = class ConsoleGateway {
     }
     agentHello(body) {
         const host = typeof body?.host === 'string' ? body.host : '?';
-        const mid = typeof body?.machineId === 'string' ? body.machineId : '';
-        this.server.emit('log:line', {
-            line: `[console] Agent hello from ${host}${mid ? ` [${mid.slice(0, 8)}…]` : ''}`,
-        });
+        this.server.emit('log:line', { line: `[console] Agent hello from ${host}` });
     }
-    agentRegister(client, body) {
-        const machineId = typeof body?.machineId === 'string' && body.machineId.trim().length > 0
-            ? body.machineId.trim().slice(0, 128)
-            : client.id;
-        const host = typeof body?.host === 'string' ? body.host : '?';
-        client.data.isAgent = true;
-        client.data.machineId = machineId;
-        this.agents.set(machineId, { socketId: client.id, host });
-        this.broadcastRoster();
+    agentRegister(client) {
+        this.agentSocketId = client.id;
         this.server.emit('log:line', {
-            line: `[console] Agent registered: ${host} (${machineId}).`,
+            line: `[console] Agent registered (socket ${client.id}).`,
         });
-    }
-    consoleSetTarget(client, body) {
-        if (client.data.isAgent) {
-            return;
-        }
-        const mid = typeof body?.machineId === 'string' ? body.machineId.trim() : '';
-        if (!mid || !this.agents.has(mid)) {
-            client.emit('log:line', {
-                line: `[console] Unknown or offline machine: ${mid || '(empty)'}`,
-            });
-            return;
-        }
-        const prev = client.data.targetMachineId;
-        if (prev && prev !== mid) {
-            client.leave(this.viewerRoom(prev));
-        }
-        client.data.targetMachineId = mid;
-        client.join(this.viewerRoom(mid));
-        client.emit('log:line', { line: `[console] Target machine: ${this.agents.get(mid)?.host ?? mid}` });
+        this.server.emit('agent:ready', { ok: true });
     }
     async terminalInput(client, body) {
         const raw = body?.data ?? '';
@@ -187,10 +120,9 @@ let ConsoleGateway = class ConsoleGateway {
                 return;
             }
         }
-        const agentSocketId = this.getAgentSocketIdForBrowser(client);
-        if (!agentSocketId) {
+        if (!this.agentSocketId) {
             client.emit('terminal:output', {
-                data: '\r\n[no agent] Pick an online machine in the header, or start agents: `py src\\main.py --api http://YOUR_API:4000`\r\n',
+                data: '\r\n[no agent] Start the Windows agent from the agent folder: `py src\\main.py --api http://127.0.0.1:4000`\r\n',
                 shell,
             });
             return;
@@ -199,7 +131,7 @@ let ConsoleGateway = class ConsoleGateway {
             this.terminalLineBuffers.delete(key);
             const requestId = (0, crypto_1.randomUUID)();
             this.shellWaiters.set(requestId, { clientId: client.id, shell });
-            this.server.to(agentSocketId).emit('agent:shell_exec', {
+            this.server.to(this.agentSocketId).emit('agent:shell_exec', {
                 requestId,
                 command: chunk,
                 shell,
@@ -211,7 +143,7 @@ let ConsoleGateway = class ConsoleGateway {
         let complete;
         if (shell === 'powershell') {
             try {
-                complete = await this.resolvePowershellComplete(merged, agentSocketId);
+                complete = await this.resolvePowershellComplete(merged);
             }
             catch {
                 complete = (0, ps_script_complete_1.isPowershellScriptComplete)(merged);
@@ -235,19 +167,22 @@ let ConsoleGateway = class ConsoleGateway {
         this.terminalLineBuffers.delete(key);
         const requestId = (0, crypto_1.randomUUID)();
         this.shellWaiters.set(requestId, { clientId: client.id, shell });
-        this.server.to(agentSocketId).emit('agent:shell_exec', {
+        this.server.to(this.agentSocketId).emit('agent:shell_exec', {
             requestId,
             command: merged,
             shell,
         });
     }
     agentPowershellParseResult(agent, body) {
+        if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+            return;
+        }
         const requestId = typeof body?.requestId === 'string' ? body.requestId : '';
         if (!requestId) {
             return;
         }
         const w = this.psParseWaiters.get(requestId);
-        if (!w || w.agentSocketId !== agent.id) {
+        if (!w) {
             return;
         }
         if (body.error) {
@@ -257,6 +192,9 @@ let ConsoleGateway = class ConsoleGateway {
         w.resolve(body.complete === true);
     }
     shellOutput(agent, body) {
+        if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+            return;
+        }
         const requestId = body?.requestId;
         if (!requestId) {
             return;
@@ -276,11 +214,10 @@ let ConsoleGateway = class ConsoleGateway {
         if (!sessionId) {
             return;
         }
-        const agentSocketId = this.getAgentSocketIdForBrowser(client);
-        if (!agentSocketId) {
+        if (!this.agentSocketId) {
             client.emit('pty:output', {
                 sessionId,
-                error: 'No agent for this session. Select a machine in the header.',
+                error: 'No agent connected. Start the Windows agent and refresh.',
             });
             return;
         }
@@ -294,7 +231,7 @@ let ConsoleGateway = class ConsoleGateway {
         }
         const rows = typeof body?.rows === 'number' ? body.rows : 24;
         const cols = typeof body?.cols === 'number' ? body.cols : 80;
-        this.server.to(agentSocketId).emit('agent:pty_start', {
+        this.server.to(this.agentSocketId).emit('agent:pty_start', {
             clientId: client.id,
             sessionId,
             shell,
@@ -303,30 +240,28 @@ let ConsoleGateway = class ConsoleGateway {
         });
     }
     ptyInput(client, body) {
-        const agentSocketId = this.getAgentSocketIdForBrowser(client);
-        if (!agentSocketId) {
+        if (!this.agentSocketId) {
             return;
         }
         const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
         if (!sessionId) {
             return;
         }
-        this.server.to(agentSocketId).emit('agent:pty_input', {
+        this.server.to(this.agentSocketId).emit('agent:pty_input', {
             clientId: client.id,
             sessionId,
             data: typeof body?.data === 'string' ? body.data : '',
         });
     }
     ptyResize(client, body) {
-        const agentSocketId = this.getAgentSocketIdForBrowser(client);
-        if (!agentSocketId) {
+        if (!this.agentSocketId) {
             return;
         }
         const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
         if (!sessionId) {
             return;
         }
-        this.server.to(agentSocketId).emit('agent:pty_resize', {
+        this.server.to(this.agentSocketId).emit('agent:pty_resize', {
             clientId: client.id,
             sessionId,
             rows: typeof body?.rows === 'number' ? body.rows : 24,
@@ -334,20 +269,22 @@ let ConsoleGateway = class ConsoleGateway {
         });
     }
     ptyClose(client, body) {
-        const agentSocketId = this.getAgentSocketIdForBrowser(client);
-        if (!agentSocketId) {
+        if (!this.agentSocketId) {
             return;
         }
         const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
         if (!sessionId) {
             return;
         }
-        this.server.to(agentSocketId).emit('agent:pty_close', {
+        this.server.to(this.agentSocketId).emit('agent:pty_close', {
             clientId: client.id,
             sessionId,
         });
     }
-    ptyAgentOutput(_agent, body) {
+    ptyAgentOutput(agent, body) {
+        if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+            return;
+        }
         const clientId = typeof body?.clientId === 'string' ? body.clientId : '';
         if (!clientId) {
             return;
@@ -360,7 +297,10 @@ let ConsoleGateway = class ConsoleGateway {
             eof: body?.eof === true,
         });
     }
-    shellDone(_agent, body) {
+    shellDone(agent, body) {
+        if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+            return;
+        }
         const requestId = body?.requestId;
         if (!requestId) {
             return;
@@ -368,51 +308,51 @@ let ConsoleGateway = class ConsoleGateway {
         this.shellWaiters.delete(requestId);
     }
     screenControl(client, body) {
-        if (client.data.isAgent) {
+        if (this.agentSocketId && client.id === this.agentSocketId) {
             return;
         }
-        const agentSocketId = this.getAgentSocketIdForBrowser(client);
-        if (!agentSocketId) {
+        if (!this.agentSocketId) {
             client.emit('log:line', {
-                line: '[console] Screen control ignored — no agent for this session.',
+                line: '[console] Screen control ignored — no agent connected.',
             });
             return;
         }
-        this.server.to(agentSocketId).emit('agent:screen_control', {
+        this.server.to(this.agentSocketId).emit('agent:screen_control', {
             action: body?.action,
             fps: body?.fps,
             monitor: body?.monitor,
         });
     }
     agentScreenFrame(agent, body) {
-        const mid = agent.data.machineId;
-        if (!mid) {
+        if (!this.agentSocketId || agent.id !== this.agentSocketId) {
             return;
         }
-        this.server.to(this.viewerRoom(mid)).emit('screen:frame', body);
+        this.server.emit('screen:frame', body);
     }
     portalRequest(client, body) {
         const requestId = body?.requestId;
         if (!requestId) {
             return;
         }
-        const agentSocketId = this.getAgentSocketIdForBrowser(client);
-        if (!agentSocketId) {
+        if (!this.agentSocketId) {
             client.emit('portal:result', {
                 requestId,
                 ok: false,
-                error: 'No agent connected. Select a machine or wait for an agent to register.',
+                error: 'No agent connected.',
             });
             return;
         }
         this.portalWaiters.set(requestId, client.id);
-        this.server.to(agentSocketId).emit('agent:portal_request', {
+        this.server.to(this.agentSocketId).emit('agent:portal_request', {
             requestId,
             type: body?.type,
             payload: body?.payload,
         });
     }
     portalResponse(agent, body) {
+        if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+            return;
+        }
         const requestId = body?.requestId;
         if (!requestId) {
             return;
@@ -445,19 +385,10 @@ __decorate([
 __decorate([
     (0, websockets_1.SubscribeMessage)('agent:register'),
     __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
     __metadata("design:type", Function),
-    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
+    __metadata("design:paramtypes", [socket_io_1.Socket]),
     __metadata("design:returntype", void 0)
 ], ConsoleGateway.prototype, "agentRegister", null);
-__decorate([
-    (0, websockets_1.SubscribeMessage)('console:set_target'),
-    __param(0, (0, websockets_1.ConnectedSocket)()),
-    __param(1, (0, websockets_1.MessageBody)()),
-    __metadata("design:type", Function),
-    __metadata("design:paramtypes", [socket_io_1.Socket, Object]),
-    __metadata("design:returntype", void 0)
-], ConsoleGateway.prototype, "consoleSetTarget", null);
 __decorate([
     (0, websockets_1.SubscribeMessage)('terminal:input'),
     __param(0, (0, websockets_1.ConnectedSocket)()),

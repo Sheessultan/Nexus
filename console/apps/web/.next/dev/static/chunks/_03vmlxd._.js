@@ -109,24 +109,14 @@ const CONSOLE_SOCKET_PROXY_ENGINE_PATH = '/console-socket/socket.io';
         ]
     };
 }
+const PORTAL_TIMEOUT_MS = 30_000;
 function useConsoleSocket() {
     _s();
     const socketRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRef"])(null);
     const [socket, setSocket] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
     const [conn, setConn] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('idle');
-    const [agents, setAgents] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
-    const [selectedMachineId, setSelectedMachineId] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
+    const [agentReady, setAgentReady] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const pendingRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRef"])(new Map());
-    const selectMachine = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "useConsoleSocket.useCallback[selectMachine]": (machineId)=>{
-            const s = socketRef.current;
-            if (!s?.connected) return;
-            s.emit('console:set_target', {
-                machineId
-            });
-            setSelectedMachineId(machineId);
-        }
-    }["useConsoleSocket.useCallback[selectMachine]"], []);
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
         "useConsoleSocket.useEffect": ()=>{
             const { url, path, transports } = getConsoleSocketIoParams();
@@ -137,20 +127,6 @@ function useConsoleSocket() {
                 reconnectionDelay: 1000,
                 reconnectionDelayMax: 10_000
             });
-            const onRoster = {
-                "useConsoleSocket.useEffect.onRoster": (msg)=>{
-                    const list = Array.isArray(msg?.agents) ? msg.agents : [];
-                    setAgents(list);
-                    setSelectedMachineId({
-                        "useConsoleSocket.useEffect.onRoster": (cur)=>{
-                            if (cur && list.some({
-                                "useConsoleSocket.useEffect.onRoster": (a)=>a.machineId === cur
-                            }["useConsoleSocket.useEffect.onRoster"])) return cur;
-                            return list[0]?.machineId ?? null;
-                        }
-                    }["useConsoleSocket.useEffect.onRoster"]);
-                }
-            }["useConsoleSocket.useEffect.onRoster"];
             const onPortal = {
                 "useConsoleSocket.useEffect.onPortal": (msg)=>{
                     const id = msg.requestId;
@@ -165,7 +141,17 @@ function useConsoleSocket() {
                     p.resolve(msg.data);
                 }
             }["useConsoleSocket.useEffect.onPortal"];
-            s.on('agents:roster', onRoster);
+            const onLog = {
+                "useConsoleSocket.useEffect.onLog": (msg)=>{
+                    const line = msg?.line ?? '';
+                    if (line.includes('Agent registered')) {
+                        setAgentReady(true);
+                    }
+                    if (line.includes('Agent disconnected')) {
+                        setAgentReady(false);
+                    }
+                }
+            }["useConsoleSocket.useEffect.onLog"];
             s.on('connect', {
                 "useConsoleSocket.useEffect": ()=>{
                     socketRef.current = s;
@@ -176,8 +162,14 @@ function useConsoleSocket() {
             s.on('disconnect', {
                 "useConsoleSocket.useEffect": ()=>{
                     setConn('idle');
+                    setAgentReady(false);
                 }
             }["useConsoleSocket.useEffect"]);
+            const onAgentReady = {
+                "useConsoleSocket.useEffect.onAgentReady": ()=>setAgentReady(true)
+            }["useConsoleSocket.useEffect.onAgentReady"];
+            s.on('log:line', onLog);
+            s.on('agent:ready', onAgentReady);
             s.on('connect_error', {
                 "useConsoleSocket.useEffect": ()=>{
                     setConn('error');
@@ -187,31 +179,19 @@ function useConsoleSocket() {
             setConn('connecting');
             return ({
                 "useConsoleSocket.useEffect": ()=>{
-                    s.off('agents:roster', onRoster);
                     s.off('portal:result', onPortal);
+                    s.off('log:line', onLog);
+                    s.off('agent:ready', onAgentReady);
                     s.disconnect();
                     socketRef.current = null;
                     pendingRef.current.clear();
                     setSocket(null);
-                    setAgents([]);
-                    setSelectedMachineId(null);
                     setConn('idle');
+                    setAgentReady(false);
                 }
             })["useConsoleSocket.useEffect"];
         }
     }["useConsoleSocket.useEffect"], []);
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
-        "useConsoleSocket.useEffect": ()=>{
-            const s = socketRef.current;
-            if (!s?.connected || !selectedMachineId) return;
-            s.emit('console:set_target', {
-                machineId: selectedMachineId
-            });
-        }
-    }["useConsoleSocket.useEffect"], [
-        socket,
-        selectedMachineId
-    ]);
     const portalRequest = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
         "useConsoleSocket.useCallback[portalRequest]": (type, payload)=>{
             const s = socketRef.current;
@@ -221,9 +201,26 @@ function useConsoleSocket() {
             const requestId = crypto.randomUUID();
             return new Promise({
                 "useConsoleSocket.useCallback[portalRequest]": (resolve, reject)=>{
+                    const timer = setTimeout({
+                        "useConsoleSocket.useCallback[portalRequest].timer": ()=>{
+                            if (!pendingRef.current.has(requestId)) return;
+                            pendingRef.current.delete(requestId);
+                            reject(new Error('Portal request timed out. Start the Windows agent (`py src\\main.py --api http://YOUR_IP:4000`) and click Retry.'));
+                        }
+                    }["useConsoleSocket.useCallback[portalRequest].timer"], PORTAL_TIMEOUT_MS);
                     pendingRef.current.set(requestId, {
-                        resolve,
-                        reject
+                        resolve: {
+                            "useConsoleSocket.useCallback[portalRequest]": (v)=>{
+                                clearTimeout(timer);
+                                resolve(v);
+                            }
+                        }["useConsoleSocket.useCallback[portalRequest]"],
+                        reject: {
+                            "useConsoleSocket.useCallback[portalRequest]": (e)=>{
+                                clearTimeout(timer);
+                                reject(e);
+                            }
+                        }["useConsoleSocket.useCallback[portalRequest]"]
                     });
                     s.emit('portal:request', {
                         requestId,
@@ -237,13 +234,11 @@ function useConsoleSocket() {
     return {
         socket,
         conn,
-        portalRequest,
-        agents,
-        selectedMachineId,
-        selectMachine
+        agentReady,
+        portalRequest
     };
 }
-_s(useConsoleSocket, "0OOl9MjEsLr6Djc9H3lkgsnd5Ag=");
+_s(useConsoleSocket, "grtqDQ93e6ChTbpMNldC4fHhe7I=");
 if (typeof globalThis.$RefreshHelpers$ === 'object' && globalThis.$RefreshHelpers !== null) {
     __turbopack_context__.k.registerExports(__turbopack_context__.m, globalThis.$RefreshHelpers$);
 }
@@ -1175,9 +1170,11 @@ var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist
 var __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$hooks$2f$useConsoleSocket$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/src/hooks/useConsoleSocket.ts [app-client] (ecmascript)");
 var __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$components$2f$TerminalPanel$2e$tsx__$5b$app$2d$client$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/src/components/TerminalPanel.tsx [app-client] (ecmascript)");
 var __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$components$2f$QuickToolsPanel$2e$tsx__$5b$app$2d$client$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/src/components/QuickToolsPanel.tsx [app-client] (ecmascript)");
+var __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$components$2f$dashboard$2e$tsx__$5b$app$2d$client$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/src/components/dashboard.tsx [app-client] (ecmascript)");
 ;
 var _s = __turbopack_context__.k.signature();
 'use client';
+;
 ;
 ;
 ;
@@ -1201,9 +1198,9 @@ function parseJson(raw) {
     if (/^[A-Za-z]:$/.test(parent)) return `${parent}\\`;
     return `${parent}\\`;
 }
-function ConsoleDashboard({ boot }) {
+function ConsoleDashboard() {
     _s();
-    const { socket, conn, portalRequest, agents, selectedMachineId, selectMachine } = (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$hooks$2f$useConsoleSocket$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useConsoleSocket"])();
+    const { socket, conn, agentReady, portalRequest } = (0, __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$hooks$2f$useConsoleSocket$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useConsoleSocket"])();
     const [path, setPath] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
     const [dirLoading, setDirLoading] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const [drives, setDrives] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])([]);
@@ -1237,30 +1234,43 @@ function ConsoleDashboard({ boot }) {
         }
     ]);
     const autoMonitorPickDone = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRef"])(false);
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
-        "ConsoleDashboard.useEffect": ()=>{
-            autoMonitorPickDone.current = false;
-        }
-    }["ConsoleDashboard.useEffect"], [
-        selectedMachineId
-    ]);
     const [shellTab, setShellTab] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('powershell');
     const [agentElevated, setAgentElevated] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const [leftTab, setLeftTab] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('explorer');
     const terminalSectionRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRef"])(null);
     const [sideLog, setSideLog] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
-    const [opsLogTitle, setOpsLogTitle] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
-    const bootAppliedRef = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useRef"])(false);
     const [sidebarCollapsed, setSidebarCollapsed] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const [terminalFocus, setTerminalFocus] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const [mobileNavOpen, setMobileNavOpen] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
     const [tabHeapMb, setTabHeapMb] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(null);
+    const refreshSession = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
+        "ConsoleDashboard.useCallback[refreshSession]": async ()=>{
+            try {
+                const raw = await portalRequest('session_info');
+                const j = parseJson(raw);
+                const who = j.whoami || `${j.userDomain || ''}\\${j.userName || ''}`.replace(/^\\+/, '').replace(/\\+$/, '');
+                const admin = j.isElevated ? ' (Administrator / elevated)' : '';
+                setAccountLine(`${who}${admin}`);
+                setMachineLine(`${j.host || ''} · ${j.home || ''}`);
+                setAgentElevated(Boolean(j.isElevated));
+            } catch  {
+                setAccountLine(null);
+                setMachineLine(null);
+                setAgentElevated(false);
+            }
+        }
+    }["ConsoleDashboard.useCallback[refreshSession]"], [
+        portalRequest
+    ]);
     const refreshDrives = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
         "ConsoleDashboard.useCallback[refreshDrives]": async ()=>{
             try {
+                setExplorerError(null);
                 const raw = await portalRequest('list_drives');
-                setDrives(parseJson(raw));
+                const list = parseJson(raw);
+                setDrives(Array.isArray(list) ? list : []);
             } catch (e) {
+                setDrives([]);
                 setExplorerError(e instanceof Error ? e.message : String(e));
             }
         }
@@ -1353,53 +1363,60 @@ function ConsoleDashboard({ boot }) {
         portalRequest,
         screenMonitor
     ]);
+    const reloadAgentData = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
+        "ConsoleDashboard.useCallback[reloadAgentData]": async ()=>{
+            await refreshDrives();
+            setEntries([]);
+            await refreshApps();
+            await refreshSession();
+        }
+    }["ConsoleDashboard.useCallback[reloadAgentData]"], [
+        refreshDrives,
+        refreshApps,
+        refreshSession
+    ]);
+    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
+        "ConsoleDashboard.useEffect": ()=>{
+            if (!socket || conn !== 'open') return;
+            void reloadAgentData();
+        }
+    }["ConsoleDashboard.useEffect"], [
+        socket,
+        conn,
+        reloadAgentData
+    ]);
+    /** Browser often connects before the Windows agent registers — retry when agent comes online. */ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
+        "ConsoleDashboard.useEffect": ()=>{
+            if (!socket || conn !== 'open' || !agentReady) return;
+            void reloadAgentData();
+        }
+    }["ConsoleDashboard.useEffect"], [
+        socket,
+        conn,
+        agentReady,
+        reloadAgentData
+    ]);
+    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
+        "ConsoleDashboard.useEffect": ()=>{
+            if (!socket || conn !== 'open' || agentReady) return;
+            const t = window.setInterval({
+                "ConsoleDashboard.useEffect.t": ()=>{
+                    void reloadAgentData();
+                }
+            }["ConsoleDashboard.useEffect.t"], 4000);
+            return ({
+                "ConsoleDashboard.useEffect": ()=>window.clearInterval(t)
+            })["ConsoleDashboard.useEffect"];
+        }
+    }["ConsoleDashboard.useEffect"], [
+        socket,
+        conn,
+        agentReady,
+        reloadAgentData
+    ]);
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
         "ConsoleDashboard.useEffect": ()=>{
             if (!socket) return;
-            void ({
-                "ConsoleDashboard.useEffect": async ()=>{
-                    await refreshDrives();
-                    setEntries([]);
-                    setExplorerError(null);
-                    await refreshApps();
-                }
-            })["ConsoleDashboard.useEffect"]();
-        }
-    }["ConsoleDashboard.useEffect"], [
-        socket,
-        selectedMachineId,
-        refreshDrives,
-        refreshApps
-    ]);
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
-        "ConsoleDashboard.useEffect": ()=>{
-            if (!socket || !selectedMachineId) return;
-            void ({
-                "ConsoleDashboard.useEffect": async ()=>{
-                    try {
-                        const raw = await portalRequest('session_info');
-                        const j = parseJson(raw);
-                        const who = j.whoami || `${j.userDomain || ''}\\${j.userName || ''}`.replace(/^\\+/, '').replace(/\\+$/, '');
-                        const admin = j.isElevated ? ' (Administrator / elevated)' : '';
-                        setAccountLine(`${who}${admin}`);
-                        setMachineLine(`${j.host || ''} · ${j.home || ''}`);
-                        setAgentElevated(Boolean(j.isElevated));
-                    } catch  {
-                        setAccountLine(null);
-                        setMachineLine(null);
-                        setAgentElevated(false);
-                    }
-                }
-            })["ConsoleDashboard.useEffect"]();
-        }
-    }["ConsoleDashboard.useEffect"], [
-        socket,
-        selectedMachineId,
-        portalRequest
-    ]);
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
-        "ConsoleDashboard.useEffect": ()=>{
-            if (!socket || !selectedMachineId) return;
             void ({
                 "ConsoleDashboard.useEffect": async ()=>{
                     try {
@@ -1424,7 +1441,6 @@ function ConsoleDashboard({ boot }) {
         }
     }["ConsoleDashboard.useEffect"], [
         socket,
-        selectedMachineId,
         portalRequest
     ]);
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
@@ -1549,7 +1565,6 @@ function ConsoleDashboard({ boot }) {
     }["ConsoleDashboard.useEffect"], [
         socket,
         liveDesktop,
-        selectedMachineId,
         portalRequest,
         captureScreen
     ]);
@@ -1565,8 +1580,7 @@ function ConsoleDashboard({ boot }) {
     }["ConsoleDashboard.useEffect"], [
         socket,
         liveDesktop,
-        screenMonitor,
-        selectedMachineId
+        screenMonitor
     ]);
     const breadcrumb = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useMemo"])({
         "ConsoleDashboard.useMemo[breadcrumb]": ()=>{
@@ -1660,44 +1674,18 @@ function ConsoleDashboard({ boot }) {
         portalRequest,
         screenMeta
     ]);
-    const runOpsFromMenu = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "ConsoleDashboard.useCallback[runOpsFromMenu]": async (type, label, payload)=>{
-            setTerminalFocus(false);
-            setLeftTab('operations');
-            setOpsLogTitle(label);
+    const runSidePortal = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
+        "ConsoleDashboard.useCallback[runSidePortal]": async (type, payload)=>{
             setSideLog('…');
             try {
                 const raw = await portalRequest(type, payload);
-                setSideLog(String(raw).slice(0, 24_000));
+                setSideLog(String(raw).slice(0, 16000));
             } catch (e) {
                 setSideLog(e instanceof Error ? e.message : String(e));
             }
         }
-    }["ConsoleDashboard.useCallback[runOpsFromMenu]"], [
+    }["ConsoleDashboard.useCallback[runSidePortal]"], [
         portalRequest
-    ]);
-    (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
-        "ConsoleDashboard.useEffect": ()=>{
-            if (!boot || bootAppliedRef.current) return;
-            if (boot.terminalFocus) {
-                bootAppliedRef.current = true;
-                setTerminalFocus(true);
-                return;
-            }
-            if (!socket?.connected) return;
-            bootAppliedRef.current = true;
-            if (boot.opsPortal) {
-                void runOpsFromMenu(boot.opsPortal.type, boot.opsPortal.label, boot.opsPortal.payload);
-                return;
-            }
-            if (boot.leftTab) {
-                setLeftTab(boot.leftTab);
-            }
-        }
-    }["ConsoleDashboard.useEffect"], [
-        boot,
-        socket?.connected,
-        runOpsFromMenu
     ]);
     (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useEffect"])({
         "ConsoleDashboard.useEffect": ()=>{
@@ -1731,7 +1719,7 @@ function ConsoleDashboard({ boot }) {
                     children: "Console"
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 488,
+                    lineNumber: 473,
                     columnNumber: 11
                 }, this) : null,
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1746,12 +1734,12 @@ function ConsoleDashboard({ boot }) {
                         className: "h-4 w-4 text-cyan-200"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 501,
+                        lineNumber: 486,
                         columnNumber: 22
                     }, this) : 'Dashboard'
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 492,
+                    lineNumber: 477,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1766,12 +1754,12 @@ function ConsoleDashboard({ boot }) {
                         className: "h-4 w-4 text-cyan-200"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 512,
+                        lineNumber: 497,
                         columnNumber: 22
                     }, this) : 'Drives / Explorer'
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 503,
+                    lineNumber: 488,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1786,12 +1774,12 @@ function ConsoleDashboard({ boot }) {
                         className: "h-4 w-4 text-cyan-200"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 523,
+                        lineNumber: 508,
                         columnNumber: 22
                     }, this) : 'Programs'
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 514,
+                    lineNumber: 499,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1806,12 +1794,12 @@ function ConsoleDashboard({ boot }) {
                         className: "h-4 w-4 text-cyan-200"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 534,
+                        lineNumber: 519,
                         columnNumber: 22
                     }, this) : 'Desktop stream'
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 525,
+                    lineNumber: 510,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1826,12 +1814,12 @@ function ConsoleDashboard({ boot }) {
                         className: "h-4 w-4 text-cyan-200"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 545,
+                        lineNumber: 530,
                         columnNumber: 22
                     }, this) : 'Quick tools'
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 536,
+                    lineNumber: 521,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1847,18 +1835,18 @@ function ConsoleDashboard({ boot }) {
                         className: "h-4 w-4"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 557,
+                        lineNumber: 542,
                         columnNumber: 22
                     }, this) : 'Terminal workspace'
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 547,
+                    lineNumber: 532,
                     columnNumber: 9
                 }, this)
             ]
         }, void 0, true, {
             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-            lineNumber: 486,
+            lineNumber: 471,
             columnNumber: 7
         }, this);
     };
@@ -1880,17 +1868,17 @@ function ConsoleDashboard({ boot }) {
                         className: "h-4 w-4"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 578,
+                        lineNumber: 563,
                         columnNumber: 13
                     }, this)
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 567,
+                    lineNumber: 552,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                lineNumber: 566,
+                lineNumber: 551,
                 columnNumber: 9
             }, this);
         }
@@ -1902,7 +1890,7 @@ function ConsoleDashboard({ boot }) {
                     children: "Ops"
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 585,
+                    lineNumber: 570,
                     columnNumber: 9
                 }, this),
                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -1961,7 +1949,7 @@ function ConsoleDashboard({ boot }) {
                                 children: label
                             }, t, false, {
                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 603,
+                                lineNumber: 588,
                                 columnNumber: 13
                             }, this)),
                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -1978,13 +1966,13 @@ function ConsoleDashboard({ boot }) {
                             children: "Device Manager"
                         }, void 0, false, {
                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                            lineNumber: 617,
+                            lineNumber: 602,
                             columnNumber: 11
                         }, this)
                     ]
                 }, void 0, true, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 588,
+                    lineNumber: 573,
                     columnNumber: 9
                 }, this),
                 sideLog ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("pre", {
@@ -1992,13 +1980,13 @@ function ConsoleDashboard({ boot }) {
                     children: sideLog
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 631,
+                    lineNumber: 616,
                     columnNumber: 11
                 }, this) : null
             ]
         }, void 0, true, {
             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-            lineNumber: 584,
+            lineNumber: 569,
             columnNumber: 7
         }, this);
     };
@@ -2011,7 +1999,7 @@ function ConsoleDashboard({ boot }) {
                 "aria-hidden": true
             }, void 0, false, {
                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                lineNumber: 645,
+                lineNumber: 630,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("header", {
@@ -2026,12 +2014,12 @@ function ConsoleDashboard({ boot }) {
                             className: "h-5 w-5"
                         }, void 0, false, {
                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                            lineNumber: 654,
+                            lineNumber: 639,
                             columnNumber: 11
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 648,
+                        lineNumber: 633,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2039,7 +2027,7 @@ function ConsoleDashboard({ boot }) {
                         children: "NEXUS INTELLIGENCE"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 656,
+                        lineNumber: 641,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2047,58 +2035,7 @@ function ConsoleDashboard({ boot }) {
                         children: conn === 'open' ? 'Online' : conn === 'connecting' ? 'Connecting' : 'Offline'
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 659,
-                        columnNumber: 9
-                    }, this),
-                    /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
-                        className: "flex min-w-0 max-w-[min(100vw-12rem,22rem)] shrink-0 items-center gap-1.5",
-                        children: [
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
-                                className: "hidden text-[9px] font-semibold uppercase tracking-wide text-cyan-600/90 sm:inline",
-                                children: "Machine"
-                            }, void 0, false, {
-                                fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 670,
-                                columnNumber: 11
-                            }, this),
-                            /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("select", {
-                                title: "Choose which PC the console controls",
-                                className: "cyber-input max-w-full min-w-0 flex-1 py-1 text-[10px] font-medium sm:text-xs",
-                                value: selectedMachineId ?? '',
-                                onChange: (e)=>{
-                                    const v = e.target.value;
-                                    if (v) selectMachine(v);
-                                },
-                                disabled: !socket?.connected || agents.length === 0,
-                                children: agents.length === 0 ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
-                                    value: "",
-                                    children: "No agents online"
-                                }, void 0, false, {
-                                    fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                    lineNumber: 684,
-                                    columnNumber: 15
-                                }, this) : agents.map((a)=>/*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("option", {
-                                        value: a.machineId,
-                                        children: [
-                                            a.host,
-                                            " (",
-                                            a.machineId.slice(0, 8),
-                                            "…)"
-                                        ]
-                                    }, a.machineId, true, {
-                                        fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 687,
-                                        columnNumber: 17
-                                    }, this))
-                            }, void 0, false, {
-                                fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 673,
-                                columnNumber: 11
-                            }, this)
-                        ]
-                    }, void 0, true, {
-                        fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 669,
+                        lineNumber: 644,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2110,7 +2047,7 @@ function ConsoleDashboard({ boot }) {
                         ]
                     }, void 0, true, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 694,
+                        lineNumber: 654,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -2121,7 +2058,7 @@ function ConsoleDashboard({ boot }) {
                         "aria-label": "Search files and applications"
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 697,
+                        lineNumber: 657,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2133,18 +2070,18 @@ function ConsoleDashboard({ boot }) {
                             className: "h-4 w-4"
                         }, void 0, false, {
                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                            lineNumber: 713,
+                            lineNumber: 673,
                             columnNumber: 28
                         }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$lucide$2d$react$2f$dist$2f$esm$2f$icons$2f$maximize$2d$2$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__$3c$export__default__as__Maximize2$3e$__["Maximize2"], {
                             className: "h-4 w-4"
                         }, void 0, false, {
                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                            lineNumber: 713,
+                            lineNumber: 673,
                             columnNumber: 64
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 704,
+                        lineNumber: 664,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2156,18 +2093,18 @@ function ConsoleDashboard({ boot }) {
                             className: "h-4 w-4"
                         }, void 0, false, {
                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                            lineNumber: 721,
+                            lineNumber: 681,
                             columnNumber: 31
                         }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$lucide$2d$react$2f$dist$2f$esm$2f$icons$2f$chevron$2d$left$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__$3c$export__default__as__ChevronLeft$3e$__["ChevronLeft"], {
                             className: "h-4 w-4"
                         }, void 0, false, {
                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                            lineNumber: 721,
+                            lineNumber: 681,
                             columnNumber: 70
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 715,
+                        lineNumber: 675,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2179,13 +2116,13 @@ function ConsoleDashboard({ boot }) {
                         ]
                     }, void 0, true, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 723,
+                        lineNumber: 683,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                lineNumber: 647,
+                lineNumber: 632,
                 columnNumber: 7
             }, this),
             mobileNavOpen ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Fragment"], {
@@ -2197,7 +2134,7 @@ function ConsoleDashboard({ boot }) {
                         onClick: closeMobileNav
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 730,
+                        lineNumber: 690,
                         columnNumber: 11
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("aside", {
@@ -2213,7 +2150,7 @@ function ConsoleDashboard({ boot }) {
                         ]
                     }, void 0, true, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 736,
+                        lineNumber: 696,
                         columnNumber: 11
                     }, this)
                 ]
@@ -2230,7 +2167,7 @@ function ConsoleDashboard({ boot }) {
                 ]
             }, void 0, true, {
                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                lineNumber: 743,
+                lineNumber: 703,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2260,25 +2197,25 @@ function ConsoleDashboard({ boot }) {
                                                 children: v === 'dashboard' ? 'Dashboard' : v === 'explorer' ? 'Drives & files' : v === 'apps' ? 'Programs' : v === 'screen' ? 'Desktop view' : 'Quick tools'
                                             }, v, false, {
                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                lineNumber: 767,
+                                                lineNumber: 727,
                                                 columnNumber: 23
                                             }, this))
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 765,
+                                        lineNumber: 725,
                                         columnNumber: 19
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f40$radix$2d$ui$2f$react$2d$tabs$2f$dist$2f$index$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Content"], {
                                         value: "dashboard",
                                         className: "flex flex-1 flex-col p-3",
-                                        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(Dashboard, {}, void 0, false, {
+                                        children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$src$2f$components$2f$dashboard$2e$tsx__$5b$app$2d$client$5d$__$28$ecmascript$29$__["default"], {}, void 0, false, {
                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                            lineNumber: 786,
+                                            lineNumber: 746,
                                             columnNumber: 21
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 785,
+                                        lineNumber: 745,
                                         columnNumber: 19
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f40$radix$2d$ui$2f$react$2d$tabs$2f$dist$2f$index$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Content"], {
@@ -2299,7 +2236,7 @@ function ConsoleDashboard({ boot }) {
                                                                     children: "This PC"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 797,
+                                                                    lineNumber: 757,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2310,13 +2247,13 @@ function ConsoleDashboard({ boot }) {
                                                                     children: "Refresh"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 800,
+                                                                    lineNumber: 760,
                                                                     columnNumber: 29
                                                                 }, this)
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 796,
+                                                            lineNumber: 756,
                                                             columnNumber: 27
                                                         }, this),
                                                         path.trim() ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2336,7 +2273,7 @@ function ConsoleDashboard({ boot }) {
                                                             children: "← Back"
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 810,
+                                                            lineNumber: 770,
                                                             columnNumber: 29
                                                         }, this) : null,
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2365,7 +2302,7 @@ function ConsoleDashboard({ boot }) {
                                                                                     "aria-hidden": true
                                                                                 }, void 0, false, {
                                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                                    lineNumber: 851,
+                                                                                    lineNumber: 811,
                                                                                     columnNumber: 37
                                                                                 }, this),
                                                                                 d.letter,
@@ -2375,13 +2312,13 @@ function ConsoleDashboard({ boot }) {
                                                                                     children: "Local Disk"
                                                                                 }, void 0, false, {
                                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                                    lineNumber: 852,
+                                                                                    lineNumber: 812,
                                                                                     columnNumber: 49
                                                                                 }, this)
                                                                             ]
                                                                         }, void 0, true, {
                                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                            lineNumber: 850,
+                                                                            lineNumber: 810,
                                                                             columnNumber: 35
                                                                         }, this),
                                                                         d.freeGb != null ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2392,25 +2329,25 @@ function ConsoleDashboard({ boot }) {
                                                                             ]
                                                                         }, void 0, true, {
                                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                            lineNumber: 855,
+                                                                            lineNumber: 815,
                                                                             columnNumber: 37
                                                                         }, this) : null
                                                                     ]
                                                                 }, d.letter, true, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 834,
+                                                                    lineNumber: 794,
                                                                     columnNumber: 33
                                                                 }, this);
                                                             })
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 828,
+                                                            lineNumber: 788,
                                                             columnNumber: 27
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                    lineNumber: 792,
+                                                    lineNumber: 752,
                                                     columnNumber: 25
                                                 }, this) : null,
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2419,22 +2356,30 @@ function ConsoleDashboard({ boot }) {
                                                         className: "flex min-h-0 flex-1 flex-col items-center justify-center rounded-xl border border-cyan-900/25 bg-black/20 px-4 py-8 text-center",
                                                         children: drivesEmpty ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Fragment"], {
                                                             children: [
-                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
-                                                                    className: "max-w-[18rem] text-xs leading-relaxed text-cyan-700/90",
-                                                                    children: "No drives listed — connect the Windows agent, then reload. The drive column appears on the left once volumes are available."
+                                                                explorerError ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
+                                                                    className: "mb-2 max-w-md text-xs text-rose-400",
+                                                                    children: explorerError
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 868,
+                                                                    lineNumber: 829,
+                                                                    columnNumber: 35
+                                                                }, this) : null,
+                                                                /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
+                                                                    className: "max-w-[18rem] text-xs leading-relaxed text-cyan-700/90",
+                                                                    children: agentReady ? 'No drives from agent — click Retry or check the agent console.' : 'Start agent on this PC: py src\\main.py --api http://3.26.196.232:4000'
+                                                                }, void 0, false, {
+                                                                    fileName: "[project]/src/components/ConsoleDashboard.tsx",
+                                                                    lineNumber: 831,
                                                                     columnNumber: 33
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
                                                                     type: "button",
-                                                                    onClick: ()=>void refreshDrives(),
+                                                                    onClick: ()=>void reloadAgentData(),
                                                                     className: "cyber-btn mt-4 text-xs",
                                                                     children: "Retry drives"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 872,
+                                                                    lineNumber: 836,
                                                                     columnNumber: 33
                                                                 }, this)
                                                             ]
@@ -2443,12 +2388,12 @@ function ConsoleDashboard({ boot }) {
                                                             children: "Select a drive on the left to browse folders and files."
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 877,
+                                                            lineNumber: 841,
                                                             columnNumber: 31
                                                         }, this)
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                        lineNumber: 865,
+                                                        lineNumber: 825,
                                                         columnNumber: 27
                                                     }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                         className: "flex min-h-0 min-w-0 flex-1 flex-col gap-2",
@@ -2458,7 +2403,7 @@ function ConsoleDashboard({ boot }) {
                                                                 children: "Loading directory…"
                                                             }, void 0, false, {
                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                lineNumber: 885,
+                                                                lineNumber: 849,
                                                                 columnNumber: 31
                                                             }, this) : null,
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2481,7 +2426,7 @@ function ConsoleDashboard({ boot }) {
                                                                         children: "← Back"
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                        lineNumber: 888,
+                                                                        lineNumber: 852,
                                                                         columnNumber: 31
                                                                     }, this),
                                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2496,7 +2441,7 @@ function ConsoleDashboard({ boot }) {
                                                                         children: "All drives"
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                        lineNumber: 905,
+                                                                        lineNumber: 869,
                                                                         columnNumber: 31
                                                                     }, this),
                                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2509,7 +2454,7 @@ function ConsoleDashboard({ boot }) {
                                                                         children: "Refresh"
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                        lineNumber: 917,
+                                                                        lineNumber: 881,
                                                                         columnNumber: 31
                                                                     }, this),
                                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2528,13 +2473,13 @@ function ConsoleDashboard({ boot }) {
                                                                         children: "Open in Windows"
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                        lineNumber: 927,
+                                                                        lineNumber: 891,
                                                                         columnNumber: 31
                                                                     }, this)
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                lineNumber: 887,
+                                                                lineNumber: 851,
                                                                 columnNumber: 29
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("nav", {
@@ -2547,7 +2492,7 @@ function ConsoleDashboard({ boot }) {
                                                                                 children: "\\"
                                                                             }, void 0, false, {
                                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                                lineNumber: 945,
+                                                                                lineNumber: 909,
                                                                                 columnNumber: 44
                                                                             }, this) : null,
                                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2557,18 +2502,18 @@ function ConsoleDashboard({ boot }) {
                                                                                 children: b.label
                                                                             }, void 0, false, {
                                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                                lineNumber: 946,
+                                                                                lineNumber: 910,
                                                                                 columnNumber: 35
                                                                             }, this)
                                                                         ]
                                                                     }, b.full, true, {
                                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                        lineNumber: 944,
+                                                                        lineNumber: 908,
                                                                         columnNumber: 33
                                                                     }, this))
                                                             }, void 0, false, {
                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                lineNumber: 942,
+                                                                lineNumber: 906,
                                                                 columnNumber: 29
                                                             }, this),
                                                             explorerError ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -2576,7 +2521,7 @@ function ConsoleDashboard({ boot }) {
                                                                 children: explorerError
                                                             }, void 0, false, {
                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                lineNumber: 957,
+                                                                lineNumber: 921,
                                                                 columnNumber: 31
                                                             }, this) : null,
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2608,7 +2553,7 @@ function ConsoleDashboard({ boot }) {
                                                                                         ]
                                                                                     }, void 0, true, {
                                                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                                        lineNumber: 977,
+                                                                                        lineNumber: 941,
                                                                                         columnNumber: 39
                                                                                     }, this),
                                                                                     e.size != null && !e.isDir ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -2619,28 +2564,28 @@ function ConsoleDashboard({ boot }) {
                                                                                         ]
                                                                                     }, void 0, true, {
                                                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                                        lineNumber: 982,
+                                                                                        lineNumber: 946,
                                                                                         columnNumber: 41
                                                                                     }, this) : null
                                                                                 ]
                                                                             }, void 0, true, {
                                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                                lineNumber: 963,
+                                                                                lineNumber: 927,
                                                                                 columnNumber: 37
                                                                             }, this)
                                                                         }, e.name, false, {
                                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                            lineNumber: 962,
+                                                                            lineNumber: 926,
                                                                             columnNumber: 35
                                                                         }, this))
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 960,
+                                                                    lineNumber: 924,
                                                                     columnNumber: 31
                                                                 }, this)
                                                             }, void 0, false, {
                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                lineNumber: 959,
+                                                                lineNumber: 923,
                                                                 columnNumber: 29
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -2652,36 +2597,36 @@ function ConsoleDashboard({ boot }) {
                                                                         children: ".exe"
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                        lineNumber: 992,
+                                                                        lineNumber: 956,
                                                                         columnNumber: 71
                                                                     }, this),
                                                                     " to launch on the agent."
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                lineNumber: 991,
+                                                                lineNumber: 955,
                                                                 columnNumber: 29
                                                             }, this)
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                        lineNumber: 883,
+                                                        lineNumber: 847,
                                                         columnNumber: 27
                                                     }, this)
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                    lineNumber: 863,
+                                                    lineNumber: 823,
                                                     columnNumber: 23
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                            lineNumber: 790,
+                                            lineNumber: 750,
                                             columnNumber: 21
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 789,
+                                        lineNumber: 749,
                                         columnNumber: 19
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f40$radix$2d$ui$2f$react$2d$tabs$2f$dist$2f$index$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Content"], {
@@ -2698,7 +2643,7 @@ function ConsoleDashboard({ boot }) {
                                                         children: "Installed"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                        lineNumber: 1003,
+                                                        lineNumber: 967,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2708,7 +2653,7 @@ function ConsoleDashboard({ boot }) {
                                                         children: "Start menu"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                        lineNumber: 1011,
+                                                        lineNumber: 975,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2718,13 +2663,13 @@ function ConsoleDashboard({ boot }) {
                                                         children: "Reload"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                        lineNumber: 1019,
+                                                        lineNumber: 983,
                                                         columnNumber: 23
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                lineNumber: 1002,
+                                                lineNumber: 966,
                                                 columnNumber: 21
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -2732,7 +2677,7 @@ function ConsoleDashboard({ boot }) {
                                                 children: "Filter with the header search bar."
                                             }, void 0, false, {
                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                lineNumber: 1027,
+                                                lineNumber: 991,
                                                 columnNumber: 21
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2750,7 +2695,7 @@ function ConsoleDashboard({ boot }) {
                                                                             children: a.name
                                                                         }, void 0, false, {
                                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                            lineNumber: 1033,
+                                                                            lineNumber: 997,
                                                                             columnNumber: 31
                                                                         }, this),
                                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2758,13 +2703,13 @@ function ConsoleDashboard({ boot }) {
                                                                             children: appsTab === 'installed' ? a.location || a.version : a.path
                                                                         }, void 0, false, {
                                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                            lineNumber: 1034,
+                                                                            lineNumber: 998,
                                                                             columnNumber: 31
                                                                         }, this)
                                                                     ]
                                                                 }, void 0, true, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 1032,
+                                                                    lineNumber: 996,
                                                                     columnNumber: 29
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2780,29 +2725,29 @@ function ConsoleDashboard({ boot }) {
                                                                     children: "Open"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 1038,
+                                                                    lineNumber: 1002,
                                                                     columnNumber: 29
                                                                 }, this)
                                                             ]
                                                         }, `${a.name}-${idx}`, true, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 1031,
+                                                            lineNumber: 995,
                                                             columnNumber: 27
                                                         }, this))
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                    lineNumber: 1029,
+                                                    lineNumber: 993,
                                                     columnNumber: 23
                                                 }, this)
                                             }, void 0, false, {
                                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                lineNumber: 1028,
+                                                lineNumber: 992,
                                                 columnNumber: 21
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 1001,
+                                        lineNumber: 965,
                                         columnNumber: 19
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f40$radix$2d$ui$2f$react$2d$tabs$2f$dist$2f$index$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Content"], {
@@ -2813,12 +2758,12 @@ function ConsoleDashboard({ boot }) {
                                             conn: conn
                                         }, void 0, false, {
                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                            lineNumber: 1059,
+                                            lineNumber: 1023,
                                             columnNumber: 21
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 1058,
+                                        lineNumber: 1022,
                                         columnNumber: 19
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f40$radix$2d$ui$2f$react$2d$tabs$2f$dist$2f$index$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__["Content"], {
@@ -2844,7 +2789,7 @@ function ConsoleDashboard({ boot }) {
                                                             children: liveDesktop ? 'Stop live' : 'Live desktop'
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 1068,
+                                                            lineNumber: 1032,
                                                             columnNumber: 25
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2855,7 +2800,7 @@ function ConsoleDashboard({ boot }) {
                                                             children: "Snapshot"
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 1081,
+                                                            lineNumber: 1045,
                                                             columnNumber: 25
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -2865,7 +2810,7 @@ function ConsoleDashboard({ boot }) {
                                                             children: screenFullscreen ? 'Exit full screen' : 'Full screen'
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 1089,
+                                                            lineNumber: 1053,
                                                             columnNumber: 25
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("label", {
@@ -2876,7 +2821,7 @@ function ConsoleDashboard({ boot }) {
                                                                     children: "Display"
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 1093,
+                                                                    lineNumber: 1057,
                                                                     columnNumber: 27
                                                                 }, this),
                                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("select", {
@@ -2891,24 +2836,24 @@ function ConsoleDashboard({ boot }) {
                                                                             ]
                                                                         }, m.index, true, {
                                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                            lineNumber: 1100,
+                                                                            lineNumber: 1064,
                                                                             columnNumber: 31
                                                                         }, this))
                                                                 }, void 0, false, {
                                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                                    lineNumber: 1094,
+                                                                    lineNumber: 1058,
                                                                     columnNumber: 27
                                                                 }, this)
                                                             ]
                                                         }, void 0, true, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 1092,
+                                                            lineNumber: 1056,
                                                             columnNumber: 25
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                    lineNumber: 1067,
+                                                    lineNumber: 1031,
                                                     columnNumber: 23
                                                 }, this),
                                                 screenHint ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -2916,7 +2861,7 @@ function ConsoleDashboard({ boot }) {
                                                     children: screenHint
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                    lineNumber: 1108,
+                                                    lineNumber: 1072,
                                                     columnNumber: 37
                                                 }, this) : null,
                                                 screenSrc ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2929,7 +2874,7 @@ function ConsoleDashboard({ boot }) {
                                                             onClick: onScreenClick
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 1116,
+                                                            lineNumber: 1080,
                                                             columnNumber: 27
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -2937,52 +2882,52 @@ function ConsoleDashboard({ boot }) {
                                                             children: "Same-screen tunnel effect is normal — switch display or use another device."
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                            lineNumber: 1122,
+                                                            lineNumber: 1086,
                                                             columnNumber: 27
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                    lineNumber: 1110,
+                                                    lineNumber: 1074,
                                                     columnNumber: 25
                                                 }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                     className: `flex flex-1 items-center justify-center rounded-lg border border-dashed border-cyan-900/40 px-4 text-center text-sm text-cyan-800/90 ${screenFullscreen ? 'min-h-[40vh]' : 'min-h-[min(200px,calc(100dvh-22rem))]'}`,
                                                     children: liveDesktop ? 'Waiting for frames… check agent (mss/Pillow) and API.' : 'Start live or take a snapshot — click image to focus a window.'
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                    lineNumber: 1127,
+                                                    lineNumber: 1091,
                                                     columnNumber: 25
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                            lineNumber: 1063,
+                                            lineNumber: 1027,
                                             columnNumber: 21
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 1062,
+                                        lineNumber: 1026,
                                         columnNumber: 19
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 760,
+                                lineNumber: 720,
                                 columnNumber: 17
                             }, this)
                         }, void 0, false, {
                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                            lineNumber: 759,
+                            lineNumber: 719,
                             columnNumber: 15
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 758,
+                        lineNumber: 718,
                         columnNumber: 13
                     }, this)
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 753,
+                    lineNumber: 713,
                     columnNumber: 11
                 }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                     className: "flex min-h-0 min-w-0 flex-1 flex-col gap-2 px-2 pb-3 pt-2 md:px-4",
@@ -2999,7 +2944,7 @@ function ConsoleDashboard({ boot }) {
                                         children: "← Back to Dashboard"
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 1146,
+                                        lineNumber: 1110,
                                         columnNumber: 17
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3007,13 +2952,13 @@ function ConsoleDashboard({ boot }) {
                                         children: "Terminal workspace"
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 1153,
+                                        lineNumber: 1117,
                                         columnNumber: 17
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 1145,
+                                lineNumber: 1109,
                                 columnNumber: 15
                             }, this),
                             accountLine ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3021,7 +2966,7 @@ function ConsoleDashboard({ boot }) {
                                 children: accountLine
                             }, void 0, false, {
                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 1156,
+                                lineNumber: 1120,
                                 columnNumber: 17
                             }, this) : null,
                             machineLine ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3029,7 +2974,7 @@ function ConsoleDashboard({ boot }) {
                                 children: machineLine
                             }, void 0, false, {
                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 1161,
+                                lineNumber: 1125,
                                 columnNumber: 17
                             }, this) : null,
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3042,7 +2987,7 @@ function ConsoleDashboard({ boot }) {
                                         children: "CMD"
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 1164,
+                                        lineNumber: 1128,
                                         columnNumber: 17
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
@@ -3058,24 +3003,24 @@ function ConsoleDashboard({ boot }) {
                                                     children: "[ADMIN]"
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                                    lineNumber: 1185,
+                                                    lineNumber: 1149,
                                                     columnNumber: 23
                                                 }, this) : null
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                            lineNumber: 1182,
+                                            lineNumber: 1146,
                                             columnNumber: 19
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                        lineNumber: 1174,
+                                        lineNumber: 1138,
                                         columnNumber: 17
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 1163,
+                                lineNumber: 1127,
                                 columnNumber: 15
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3091,40 +3036,40 @@ function ConsoleDashboard({ boot }) {
                                     agentElevated: agentElevated,
                                     hideChrome: true,
                                     isActive: true
-                                }, `${selectedMachineId ?? 'none'}-${shellTab}`, false, {
+                                }, shellTab, false, {
                                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                    lineNumber: 1193,
+                                    lineNumber: 1157,
                                     columnNumber: 17
                                 }, this)
                             }, void 0, false, {
                                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                                lineNumber: 1192,
+                                lineNumber: 1156,
                                 columnNumber: 15
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                        lineNumber: 1144,
+                        lineNumber: 1108,
                         columnNumber: 13
                     }, this)
                 }, void 0, false, {
                     fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                    lineNumber: 1143,
+                    lineNumber: 1107,
                     columnNumber: 11
                 }, this)
             }, void 0, false, {
                 fileName: "[project]/src/components/ConsoleDashboard.tsx",
-                lineNumber: 751,
+                lineNumber: 711,
                 columnNumber: 7
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/src/components/ConsoleDashboard.tsx",
-        lineNumber: 642,
+        lineNumber: 627,
         columnNumber: 5
     }, this);
 }
-_s(ConsoleDashboard, "efopQG2Rj2I2NabpLP2I4wkf/KY=", false, function() {
+_s(ConsoleDashboard, "YtkJLhRapwDiNKTCm1FacgL2Xis=", false, function() {
     return [
         __TURBOPACK__imported__module__$5b$project$5d2f$src$2f$hooks$2f$useConsoleSocket$2e$ts__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useConsoleSocket"]
     ];
@@ -3169,23 +3114,6 @@ function Dashboard() {
     _s();
     const [searchQuery, setSearchQuery] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])('');
     const [showConsole, setShowConsole] = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useState"])(false);
-    const openConsoleFullscreen = (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$index$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["useCallback"])({
-        "Dashboard.useCallback[openConsoleFullscreen]": ()=>{
-            if (typeof document === 'undefined') return;
-            void ({
-                "Dashboard.useCallback[openConsoleFullscreen]": async ()=>{
-                    try {
-                        const el = document.documentElement;
-                        if (document.fullscreenElement !== el) {
-                            await el.requestFullscreen();
-                        }
-                    } catch  {
-                    /* Browser may block without gesture; console still opens */ }
-                    setShowConsole(true);
-                }
-            })["Dashboard.useCallback[openConsoleFullscreen]"]();
-        }
-    }["Dashboard.useCallback[openConsoleFullscreen]"], []);
     const quickTools = [
         {
             id: 'terminal',
@@ -3243,7 +3171,7 @@ function Dashboard() {
     if (showConsole) {
         return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$src$2f$components$2f$ConsoleDashboard$2e$tsx__$5b$app$2d$client$5d$__$28$ecmascript$29$__["default"], {}, void 0, false, {
             fileName: "[project]/src/components/dashboard.tsx",
-            lineNumber: 94,
+            lineNumber: 79,
             columnNumber: 12
         }, this);
     }
@@ -3252,35 +3180,35 @@ function Dashboard() {
         children: [
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$src$2f$components$2f$BinaryRain$2e$tsx__$5b$app$2d$client$5d$__$28$ecmascript$29$__["default"], {}, void 0, false, {
                 fileName: "[project]/src/components/dashboard.tsx",
-                lineNumber: 99,
+                lineNumber: 84,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 className: "fixed inset-0 bg-[linear-gradient(rgba(0,240,255,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(0,240,255,0.03)_1px,transparent_1px)] bg-[size:50px_50px] pointer-events-none z-0"
             }, void 0, false, {
                 fileName: "[project]/src/components/dashboard.tsx",
-                lineNumber: 102,
+                lineNumber: 87,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 className: "fixed top-0 -left-40 w-80 h-80 bg-cyan-500/20 rounded-full blur-3xl animate-pulse z-0"
             }, void 0, false, {
                 fileName: "[project]/src/components/dashboard.tsx",
-                lineNumber: 105,
+                lineNumber: 90,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 className: "fixed bottom-0 -right-40 w-80 h-80 bg-emerald-500/20 rounded-full blur-3xl animate-pulse z-0"
             }, void 0, false, {
                 fileName: "[project]/src/components/dashboard.tsx",
-                lineNumber: 106,
+                lineNumber: 91,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                 className: "fixed inset-0 pointer-events-none z-[1] matrix-scanlines opacity-[0.06]"
             }, void 0, false, {
                 fileName: "[project]/src/components/dashboard.tsx",
-                lineNumber: 109,
+                lineNumber: 94,
                 columnNumber: 7
             }, this),
             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3305,12 +3233,12 @@ function Dashboard() {
                                                                 className: "w-5 h-5 text-cyan-400"
                                                             }, void 0, false, {
                                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                                lineNumber: 120,
+                                                                lineNumber: 105,
                                                                 columnNumber: 21
                                                             }, this)
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/dashboard.tsx",
-                                                            lineNumber: 119,
+                                                            lineNumber: 104,
                                                             columnNumber: 19
                                                         }, this),
                                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h1", {
@@ -3318,13 +3246,13 @@ function Dashboard() {
                                                             children: "NEXUS INTELLIGENCE"
                                                         }, void 0, false, {
                                                             fileName: "[project]/src/components/dashboard.tsx",
-                                                            lineNumber: 122,
+                                                            lineNumber: 107,
                                                             columnNumber: 19
                                                         }, this)
                                                     ]
                                                 }, void 0, true, {
                                                     fileName: "[project]/src/components/dashboard.tsx",
-                                                    lineNumber: 118,
+                                                    lineNumber: 103,
                                                     columnNumber: 17
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3332,13 +3260,13 @@ function Dashboard() {
                                                     children: "Unified AI control system for real-time automation, analysis, and command execution."
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/dashboard.tsx",
-                                                    lineNumber: 126,
+                                                    lineNumber: 111,
                                                     columnNumber: 17
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 117,
+                                            lineNumber: 102,
                                             columnNumber: 15
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3348,7 +3276,7 @@ function Dashboard() {
                                                     className: "w-4 h-4 text-emerald-400 animate-pulse"
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/dashboard.tsx",
-                                                    lineNumber: 131,
+                                                    lineNumber: 116,
                                                     columnNumber: 17
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -3356,19 +3284,19 @@ function Dashboard() {
                                                     children: "ONLINE"
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/dashboard.tsx",
-                                                    lineNumber: 132,
+                                                    lineNumber: 117,
                                                     columnNumber: 17
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 130,
+                                            lineNumber: 115,
                                             columnNumber: 15
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/src/components/dashboard.tsx",
-                                    lineNumber: 116,
+                                    lineNumber: 101,
                                     columnNumber: 13
                                 }, this),
                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3378,7 +3306,7 @@ function Dashboard() {
                                             className: "absolute left-3 top-3 w-4 h-4 text-cyan-500/60"
                                         }, void 0, false, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 138,
+                                            lineNumber: 123,
                                             columnNumber: 15
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("input", {
@@ -3389,24 +3317,24 @@ function Dashboard() {
                                             className: "w-full pl-10 pr-4 py-2.5 bg-black/40 border border-cyan-500/30 rounded-lg text-cyan-50 placeholder:text-cyan-700/60 focus:outline-none focus:border-cyan-400/60 focus:ring-1 focus:ring-cyan-500/30 transition-all text-sm"
                                         }, void 0, false, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 139,
+                                            lineNumber: 124,
                                             columnNumber: 15
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/src/components/dashboard.tsx",
-                                    lineNumber: 137,
+                                    lineNumber: 122,
                                     columnNumber: 13
                                 }, this)
                             ]
                         }, void 0, true, {
                             fileName: "[project]/src/components/dashboard.tsx",
-                            lineNumber: 115,
+                            lineNumber: 100,
                             columnNumber: 11
                         }, this)
                     }, void 0, false, {
                         fileName: "[project]/src/components/dashboard.tsx",
-                        lineNumber: 114,
+                        lineNumber: 99,
                         columnNumber: 9
                     }, this),
                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("main", {
@@ -3426,20 +3354,20 @@ function Dashboard() {
                                                         children: "System Status"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                        lineNumber: 156,
+                                                        lineNumber: 141,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                         className: "w-2 h-2 rounded-full bg-emerald-400 animate-pulse"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                        lineNumber: 159,
+                                                        lineNumber: 144,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 155,
+                                                lineNumber: 140,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3447,7 +3375,7 @@ function Dashboard() {
                                                 children: "OPERATIONAL"
                                             }, void 0, false, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 161,
+                                                lineNumber: 146,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3455,13 +3383,13 @@ function Dashboard() {
                                                 children: "All systems nominal"
                                             }, void 0, false, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 162,
+                                                lineNumber: 147,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/src/components/dashboard.tsx",
-                                        lineNumber: 154,
+                                        lineNumber: 139,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3475,42 +3403,42 @@ function Dashboard() {
                                                         children: "Active Sessions"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                        lineNumber: 167,
+                                                        lineNumber: 152,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$lucide$2d$react$2f$dist$2f$esm$2f$icons$2f$zap$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__$3c$export__default__as__Zap$3e$__["Zap"], {
                                                         className: "w-4 h-4 text-emerald-400"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                        lineNumber: 170,
+                                                        lineNumber: 155,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 166,
+                                                lineNumber: 151,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
                                                 className: "text-2xl font-bold text-emerald-200 mb-1",
-                                                children: "—"
+                                                children: "1"
                                             }, void 0, false, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 172,
+                                                lineNumber: 157,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
                                                 className: "text-xs text-emerald-700/80",
-                                                children: "Open console to see agents"
+                                                children: "Connected & ready"
                                             }, void 0, false, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 173,
+                                                lineNumber: 158,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/src/components/dashboard.tsx",
-                                        lineNumber: 165,
+                                        lineNumber: 150,
                                         columnNumber: 13
                                     }, this),
                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3524,20 +3452,20 @@ function Dashboard() {
                                                         children: "Network Uptime"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                        lineNumber: 178,
+                                                        lineNumber: 163,
                                                         columnNumber: 17
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$lucide$2d$react$2f$dist$2f$esm$2f$icons$2f$lock$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__$3c$export__default__as__Lock$3e$__["Lock"], {
                                                         className: "w-4 h-4 text-amber-400"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                        lineNumber: 181,
+                                                        lineNumber: 166,
                                                         columnNumber: 17
                                                     }, this)
                                                 ]
                                             }, void 0, true, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 177,
+                                                lineNumber: 162,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3545,7 +3473,7 @@ function Dashboard() {
                                                 children: "99.8%"
                                             }, void 0, false, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 183,
+                                                lineNumber: 168,
                                                 columnNumber: 15
                                             }, this),
                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3553,19 +3481,19 @@ function Dashboard() {
                                                 children: "Secure connection"
                                             }, void 0, false, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 184,
+                                                lineNumber: 169,
                                                 columnNumber: 15
                                             }, this)
                                         ]
                                     }, void 0, true, {
                                         fileName: "[project]/src/components/dashboard.tsx",
-                                        lineNumber: 176,
+                                        lineNumber: 161,
                                         columnNumber: 13
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/src/components/dashboard.tsx",
-                                lineNumber: 153,
+                                lineNumber: 138,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3578,12 +3506,12 @@ function Dashboard() {
                                             children: "Quick Access Tools"
                                         }, void 0, false, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 191,
+                                            lineNumber: 176,
                                             columnNumber: 15
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/dashboard.tsx",
-                                        lineNumber: 190,
+                                        lineNumber: 175,
                                         columnNumber: 13
                                     }, this),
                                     filteredTools.length > 0 ? /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3607,14 +3535,14 @@ function Dashboard() {
                                                 rose: 'text-rose-400'
                                             };
                                             return /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                                onClick: ()=>openConsoleFullscreen(),
+                                                onClick: ()=>setShowConsole(true),
                                                 className: `group/card relative p-5 rounded-xl border bg-black/30 transition-all duration-300 text-left overflow-hidden ${colorClasses[tool.color]}`,
                                                 children: [
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                                         className: "absolute inset-0 bg-gradient-to-br from-white/0 to-white/0 group-hover/card:from-white/5 group-hover/card:to-white/0 transition-all"
                                                     }, void 0, false, {
                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                        lineNumber: 226,
+                                                        lineNumber: 211,
                                                         columnNumber: 23
                                                     }, this),
                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3629,25 +3557,25 @@ function Dashboard() {
                                                                             className: "w-5 h-5"
                                                                         }, void 0, false, {
                                                                             fileName: "[project]/src/components/dashboard.tsx",
-                                                                            lineNumber: 230,
+                                                                            lineNumber: 215,
                                                                             columnNumber: 29
                                                                         }, this)
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                                        lineNumber: 229,
+                                                                        lineNumber: 214,
                                                                         columnNumber: 27
                                                                     }, this),
                                                                     /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$lucide$2d$react$2f$dist$2f$esm$2f$icons$2f$chevron$2d$right$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__$3c$export__default__as__ChevronRight$3e$__["ChevronRight"], {
                                                                         className: "w-4 h-4 opacity-0 group-hover/card:opacity-100 transition-opacity"
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                                        lineNumber: 232,
+                                                                        lineNumber: 217,
                                                                         columnNumber: 27
                                                                     }, this)
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                                lineNumber: 228,
+                                                                lineNumber: 213,
                                                                 columnNumber: 25
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("h3", {
@@ -3655,7 +3583,7 @@ function Dashboard() {
                                                                 children: tool.label
                                                             }, void 0, false, {
                                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                                lineNumber: 234,
+                                                                lineNumber: 219,
                                                                 columnNumber: 25
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("p", {
@@ -3663,7 +3591,7 @@ function Dashboard() {
                                                                 children: tool.desc
                                                             }, void 0, false, {
                                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                                lineNumber: 235,
+                                                                lineNumber: 220,
                                                                 columnNumber: 25
                                                             }, this),
                                                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3673,32 +3601,32 @@ function Dashboard() {
                                                                         className: "w-3 h-3"
                                                                     }, void 0, false, {
                                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                                        lineNumber: 237,
+                                                                        lineNumber: 222,
                                                                         columnNumber: 27
                                                                     }, this),
                                                                     " Access tool"
                                                                 ]
                                                             }, void 0, true, {
                                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                                lineNumber: 236,
+                                                                lineNumber: 221,
                                                                 columnNumber: 25
                                                             }, this)
                                                         ]
                                                     }, void 0, true, {
                                                         fileName: "[project]/src/components/dashboard.tsx",
-                                                        lineNumber: 227,
+                                                        lineNumber: 212,
                                                         columnNumber: 23
                                                     }, this)
                                                 ]
                                             }, tool.id, true, {
                                                 fileName: "[project]/src/components/dashboard.tsx",
-                                                lineNumber: 221,
+                                                lineNumber: 206,
                                                 columnNumber: 21
                                             }, this);
                                         })
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/dashboard.tsx",
-                                        lineNumber: 197,
+                                        lineNumber: 182,
                                         columnNumber: 15
                                     }, this) : /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                         className: "p-8 rounded-xl border border-cyan-500/20 bg-black/30 text-center",
@@ -3711,31 +3639,31 @@ function Dashboard() {
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 246,
+                                            lineNumber: 231,
                                             columnNumber: 17
                                         }, this)
                                     }, void 0, false, {
                                         fileName: "[project]/src/components/dashboard.tsx",
-                                        lineNumber: 245,
+                                        lineNumber: 230,
                                         columnNumber: 15
                                     }, this)
                                 ]
                             }, void 0, true, {
                                 fileName: "[project]/src/components/dashboard.tsx",
-                                lineNumber: 189,
+                                lineNumber: 174,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                 className: "mb-8",
                                 children: /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("button", {
-                                    onClick: ()=>openConsoleFullscreen(),
+                                    onClick: ()=>setShowConsole(true),
                                     className: "w-full group relative px-6 py-4 rounded-xl border border-emerald-500/50 bg-gradient-to-r from-emerald-500/20 to-cyan-500/20 hover:from-emerald-500/30 hover:to-cyan-500/30 transition-all duration-300 overflow-hidden",
                                     children: [
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
                                             className: "absolute inset-0 bg-gradient-to-r from-emerald-500/0 via-white/5 to-emerald-500/0 group-hover:from-emerald-500/10 group-hover:via-white/10 group-hover:to-emerald-500/10 transition-all"
                                         }, void 0, false, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 259,
+                                            lineNumber: 244,
                                             columnNumber: 15
                                         }, this),
                                         /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3745,7 +3673,7 @@ function Dashboard() {
                                                     className: "w-5 h-5 text-emerald-400"
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/dashboard.tsx",
-                                                    lineNumber: 261,
+                                                    lineNumber: 246,
                                                     columnNumber: 17
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("span", {
@@ -3753,31 +3681,31 @@ function Dashboard() {
                                                     children: "Launch Full Console Workspace"
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/dashboard.tsx",
-                                                    lineNumber: 262,
+                                                    lineNumber: 247,
                                                     columnNumber: 17
                                                 }, this),
                                                 /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])(__TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$lucide$2d$react$2f$dist$2f$esm$2f$icons$2f$chevron$2d$right$2e$mjs__$5b$app$2d$client$5d$__$28$ecmascript$29$__$3c$export__default__as__ChevronRight$3e$__["ChevronRight"], {
                                                     className: "w-5 h-5 text-emerald-400 group-hover:translate-x-1 transition-transform"
                                                 }, void 0, false, {
                                                     fileName: "[project]/src/components/dashboard.tsx",
-                                                    lineNumber: 265,
+                                                    lineNumber: 250,
                                                     columnNumber: 17
                                                 }, this)
                                             ]
                                         }, void 0, true, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 260,
+                                            lineNumber: 245,
                                             columnNumber: 15
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/src/components/dashboard.tsx",
-                                    lineNumber: 255,
+                                    lineNumber: 240,
                                     columnNumber: 13
                                 }, this)
                             }, void 0, false, {
                                 fileName: "[project]/src/components/dashboard.tsx",
-                                lineNumber: 254,
+                                lineNumber: 239,
                                 columnNumber: 11
                             }, this),
                             /*#__PURE__*/ (0, __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$dist$2f$compiled$2f$react$2f$jsx$2d$dev$2d$runtime$2e$js__$5b$app$2d$client$5d$__$28$ecmascript$29$__["jsxDEV"])("div", {
@@ -3791,40 +3719,40 @@ function Dashboard() {
                                             children: "Secured"
                                         }, void 0, false, {
                                             fileName: "[project]/src/components/dashboard.tsx",
-                                            lineNumber: 273,
+                                            lineNumber: 258,
                                             columnNumber: 77
                                         }, this)
                                     ]
                                 }, void 0, true, {
                                     fileName: "[project]/src/components/dashboard.tsx",
-                                    lineNumber: 272,
+                                    lineNumber: 257,
                                     columnNumber: 13
                                 }, this)
                             }, void 0, false, {
                                 fileName: "[project]/src/components/dashboard.tsx",
-                                lineNumber: 271,
+                                lineNumber: 256,
                                 columnNumber: 11
                             }, this)
                         ]
                     }, void 0, true, {
                         fileName: "[project]/src/components/dashboard.tsx",
-                        lineNumber: 151,
+                        lineNumber: 136,
                         columnNumber: 9
                     }, this)
                 ]
             }, void 0, true, {
                 fileName: "[project]/src/components/dashboard.tsx",
-                lineNumber: 112,
+                lineNumber: 97,
                 columnNumber: 7
             }, this)
         ]
     }, void 0, true, {
         fileName: "[project]/src/components/dashboard.tsx",
-        lineNumber: 98,
+        lineNumber: 83,
         columnNumber: 5
     }, this);
 }
-_s(Dashboard, "8mAgBGsqn10yM1gfSWyXgQtwgyk=");
+_s(Dashboard, "1/tlLpr29NwPsVXVfr98jxxmbrA=");
 _c = Dashboard;
 var _c;
 __turbopack_context__.k.register(_c, "Dashboard");

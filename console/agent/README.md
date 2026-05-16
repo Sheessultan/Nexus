@@ -12,10 +12,6 @@ This process runs **on the same PC** where you want commands to execute. The web
 | **Backend (NestJS `/console`)** | Routes PTY traffic to the registered agent; streams `pty:output` back to the browser. |
 | **Agent (this Python app)** | Registers with `agent:register`; spawns ConPTY sessions (`agent/src/pty_manager.py`) and handles portal / screen capture. |
 
-## Multi-PC identity
-
-Each agent stores a stable UUID in `%LOCALAPPDATA%\ConsoleAgent\machine_id.txt` so the web console **Machine** dropdown can list many PCs. Multiple agents can register to the same API at once.
-
 ## Shell selection (from the UI terminal)
 
 - **CMD / PowerShell** tabs start separate **ConPTY** sessions (`pywinpty`): real `cmd.exe` / `powershell.exe` from **x64 System32**, UTF-8, arrow-key history, pipes, `diskpart` when you run it interactively, etc.
@@ -63,7 +59,7 @@ cmd: systeminfo
 
 This repo ships a **normal Python script**, not a signed installer. For production you typically:
 
-1. **Task Scheduler** — trigger “At startup” or “At log on”; action: `py C:\path\to\console\agent\src\main.py --api http://YOUR_SERVER:4000`. See **`agent/scripts/install-silent.ps1`**. The agent uses **infinite Socket.IO reconnect** (`reconnection_attempts=0`): if the API is down or the network drops, it keeps retrying until it connects again — no manual “push” needed.
+1. **Task Scheduler** — trigger “At startup” or “At log on”; action: `py C:\path\to\console\agent\src\main.py --api http://YOUR_SERVER:4000`.
 2. **NSSM** (Non-Sucking Service Manager) — wrap `py.exe` with arguments pointing at `main.py`; run as a dedicated service account after hardening.
 3. **pywin32 `servicemodule`** — implement a proper Windows Service class (more code).
 
