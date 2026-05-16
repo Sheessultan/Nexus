@@ -4,7 +4,7 @@
 #>
 [CmdletBinding()]
 param(
-    [string]$ApiUrl = "http://3.26.196.232:4000",
+    [string]$ApiUrl = "http://52.62.136.167:4000",
     [string]$InstallDir = "$env:ProgramFiles\ConsoleAgent",
     [string]$TaskName = "ConsoleAgent"
 )
@@ -54,5 +54,5 @@ Set-ItemProperty $regPath UninstallString "powershell.exe -ExecutionPolicy Bypas
 Write-Host ""
 Write-Host "Installed: $InstallDir" -ForegroundColor Green
 Write-Host "API:       $($config.apiUrl)" -ForegroundColor Green
-Write-Host "Portal:    http://3.26.196.232:3000" -ForegroundColor Cyan
+Write-Host "Portal:    http://52.62.136.167:3000" -ForegroundColor Cyan
 Write-Host "Task:      $TaskName (runs at logon)" -ForegroundColor Green

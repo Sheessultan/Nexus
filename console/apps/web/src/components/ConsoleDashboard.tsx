@@ -831,7 +831,7 @@ export default function ConsoleDashboard() {
                                 <p className="max-w-[18rem] text-xs leading-relaxed text-cyan-700/90">
                                   {agentReady
                                     ? 'No drives from agent — click Retry or check the agent console.'
-                                    : 'Start agent on this PC: py src\\main.py --api http://3.26.196.232:4000'}
+                                    : 'Start agent on this PC: py src\\main.py --api http://52.62.136.167:4000'}
                                 </p>
                                 <button type="button" onClick={() => void reloadAgentData()} className="cyber-btn mt-4 text-xs">
                                   Retry drives
