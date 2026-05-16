@@ -29,4 +29,4 @@ UI: live terminal (xterm) only on the Terminal dock item; other tools use the po
 
 Where to add APIs (REST + Socket.IO + portal types): docs\API.md
 
-IMPORTANT: agent folder mein "npm i" mat chalao — wahan package.json nahi hai by design.
+IMPORTANT: agent folder mein "npm i" mat chalao — wahan package.json nahi hai by design.... 
