@@ -18,7 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useConsoleSocket } from '@/hooks/useConsoleSocket';
 import TerminalPanel from '@/components/TerminalPanel';
 import QuickToolsPanel from '@/components/QuickToolsPanel';
-import Dashboard from '@/components/dashboard';
+import ConsoleOverviewPanel from '@/components/ConsoleOverviewPanel';
 
 type Drive = { letter: string; path: string; freeGb: number | null };
 type DirEntry = { name: string; isDir: boolean; size: number | null };
@@ -47,7 +47,8 @@ function explorerParentPath(p: string): string | null {
 }
 
 export default function ConsoleDashboard() {
-  const { socket, conn, agentReady, portalRequest } = useConsoleSocket();
+  const { socket, conn, agentReady, agents, selectedAgentId, selectAgent, portalRequest } =
+    useConsoleSocket();
   const [path, setPath] = useState('');
   const [dirLoading, setDirLoading] = useState(false);
   const [drives, setDrives] = useState<Drive[]>([]);
@@ -230,6 +231,11 @@ export default function ConsoleDashboard() {
     if (!socket || conn !== 'open' || !agentReady) return;
     void reloadAgentData();
   }, [socket, conn, agentReady, reloadAgentData]);
+
+  useEffect(() => {
+    if (!socket || conn !== 'open' || !selectedAgentId) return;
+    void reloadAgentData();
+  }, [socket, conn, selectedAgentId, reloadAgentData]);
 
   useEffect(() => {
     if (!socket || conn !== 'open' || agentReady) return;
@@ -651,7 +657,30 @@ export default function ConsoleDashboard() {
         >
           {conn === 'open' ? 'Online' : conn === 'connecting' ? 'Connecting' : 'Offline'}
         </span>
-        <span className="hidden min-w-0 truncate text-[10px] text-cyan-700/95 md:inline lg:max-w-[14rem]">
+        <label className="hidden min-w-0 items-center gap-1.5 md:flex">
+          <span className="shrink-0 text-[9px] font-semibold uppercase tracking-wide text-cyan-600/90">
+            Machine
+          </span>
+          <select
+            value={selectedAgentId ?? ''}
+            onChange={(e) => {
+              const id = e.target.value;
+              if (id) selectAgent(id);
+            }}
+            className="cyber-input max-w-[11rem] py-1 text-[11px]"
+            aria-label="Select Windows agent"
+          >
+            <option value="">
+              {agents.length === 0 ? 'No agents online' : 'Select machine…'}
+            </option>
+            {agents.map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.host} · online
+              </option>
+            ))}
+          </select>
+        </label>
+        <span className="hidden min-w-0 truncate text-[10px] text-cyan-700/95 lg:inline lg:max-w-[10rem]">
           {shellTab === 'powershell' ? 'PS' : 'CMD'} · {accountLine ?? '—'}
         </span>
         <input
@@ -743,7 +772,17 @@ export default function ConsoleDashboard() {
                   </Tabs.List>
 
                   <Tabs.Content value="dashboard" className="flex flex-1 flex-col p-3">
-                    <Dashboard />
+                    <ConsoleOverviewPanel
+                      conn={conn}
+                      agentReady={agentReady}
+                      agents={agents}
+                      selectedAgentId={selectedAgentId}
+                      accountLine={accountLine}
+                      machineLine={machineLine}
+                      onSelectAgent={selectAgent}
+                      onRefresh={() => void reloadAgentData()}
+                      onOpenTerminal={() => setTerminalFocus(true)}
+                    />
                   </Tabs.Content>
 
                   <Tabs.Content value="explorer" className="flex min-h-0 flex-1 flex-col gap-2 p-3">
@@ -831,7 +870,7 @@ export default function ConsoleDashboard() {
                                 <p className="max-w-[18rem] text-xs leading-relaxed text-cyan-700/90">
                                   {agentReady
                                     ? 'No drives from agent — click Retry or check the agent console.'
-                                    : 'Start agent on this PC: py src\\main.py --api http://3.26.196.232:4000'}
+                                    : 'Start agent on this PC: py src\\main.py --api http://52.62.136.167:4000'}
                                 </p>
                                 <button type="button" onClick={() => void reloadAgentData()} className="cyber-btn mt-4 text-xs">
                                   Retry drives
@@ -1155,7 +1194,7 @@ export default function ConsoleDashboard() {
               </div>
               <div className="relative flex min-h-0 flex-1 flex-col">
                 <TerminalPanel
-                  key={shellTab}
+                  key={`${selectedAgentId ?? 'none'}-${shellTab}`}
                   socket={socket}
                   conn={conn}
                   portalRequest={portalRequest}

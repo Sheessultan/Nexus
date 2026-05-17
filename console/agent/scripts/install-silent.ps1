@@ -1,12 +1,13 @@
 <#
   Registers a Windows Scheduled Task to run the NEXUS INTELLIGENCE agent at logon.
-  Run from PowerShell:  .\install-silent.ps1 -ApiBase "http://127.0.0.1:4000"
+  Run from PowerShell:  .\install-silent.ps1 -ApiBase "http://52.62.136.167:4000"
   Requires: Python on PATH or set -PythonExe to full path to python.exe / py.exe
 #>
 param(
-  [string]$ApiBase = "http://127.0.0.1:4000",
+  [string]$ApiBase = "http://52.62.136.167:4000",
   [string]$PythonExe = "",
-  [string]$TaskName = "AIConsoleAgent"
+  [string]$TaskName = "AIConsoleAgent",
+  [switch]$Hidden
 )
 
 $ErrorActionPreference = "Stop"
@@ -19,11 +20,17 @@ if (-not (Test-Path $scriptPath)) {
 }
 
 if (-not $PythonExe) {
-  $py = Get-Command py -ErrorAction SilentlyContinue
-  if ($py) { $PythonExe = $py.Source }
-  else {
-    $py = Get-Command python -ErrorAction SilentlyContinue
+  if ($Hidden) {
+    $pyw = Get-Command pythonw -ErrorAction SilentlyContinue
+    if ($pyw) { $PythonExe = $pyw.Source }
+  }
+  if (-not $PythonExe) {
+    $py = Get-Command py -ErrorAction SilentlyContinue
     if ($py) { $PythonExe = $py.Source }
+    else {
+      $py = Get-Command python -ErrorAction SilentlyContinue
+      if ($py) { $PythonExe = $py.Source }
+    }
   }
 }
 if (-not $PythonExe -or -not (Test-Path $PythonExe)) {
@@ -35,4 +42,5 @@ $action = New-ScheduledTaskAction -Execute $PythonExe -Argument $argLine -Workin
 $trigger = New-ScheduledTaskTrigger -AtLogOn
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -StartWhenAvailable
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger $trigger -Settings $settings -Force
-Write-Host "Registered scheduled task '$TaskName'. Open Task Scheduler to review Run whether user is logged on / highest privileges."
+Write-Host "Registered scheduled task '$TaskName' -> $ApiBase"
+Write-Host "Agent starts at logon (no console if you used -Hidden with pythonw). Open Task Scheduler to review privileges."

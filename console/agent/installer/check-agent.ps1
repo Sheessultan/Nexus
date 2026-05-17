@@ -6,7 +6,7 @@ if (-not (Test-Path $configPath)) {
 $cfg = Get-Content $configPath -Raw | ConvertFrom-Json
 Write-Host "apiUrl: $($cfg.apiUrl)"
 if ($cfg.apiUrl -match '127\.0\.0\.1|localhost') {
-    Write-Host "WRONG: still localhost. Set http://3.26.196.232:4000" -ForegroundColor Red
+    Write-Host "WRONG: still localhost. Set http://52.62.136.167:4000" -ForegroundColor Red
 }
 try {
     $r = Invoke-WebRequest "$($cfg.apiUrl)/health" -UseBasicParsing -TimeoutSec 10

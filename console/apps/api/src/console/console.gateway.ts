@@ -2,6 +2,7 @@ import { randomUUID } from 'crypto';
 import {
   ConnectedSocket,
   MessageBody,
+  OnGatewayConnection,
   OnGatewayDisconnect,
   SubscribeMessage,
   WebSocketGateway,
@@ -15,17 +16,26 @@ import { isCmdScriptComplete, isPowershellScriptComplete } from './ps-script-com
 type ShellKind = 'cmd' | 'powershell';
 type PtyShellKind = 'cmd' | 'powershell' | 'powershell_admin';
 
+type RegisteredAgent = {
+  socketId: string;
+  host: string;
+  connectedAt: number;
+};
+
 @WebSocketGateway({
   namespace: '/console',
   cors: { origin: true, credentials: false },
 })
-export class ConsoleGateway implements OnGatewayDisconnect {
+export class ConsoleGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
   server!: Server;
 
   constructor(private readonly powershellParser: PowershellParserService) {}
 
-  private agentSocketId: string | null = null;
+  /** All connected Windows agents (socket id → metadata). */
+  private readonly agents = new Map<string, RegisteredAgent>();
+  /** Browser client → chosen agent socket id. */
+  private readonly clientSelectedAgent = new Map<string, string>();
   private readonly shellWaiters = new Map<string, { clientId: string; shell: ShellKind }>();
   private readonly portalWaiters = new Map<string, string>();
   /** Pending `agent:powershell_parse_result` callbacks (API has no local powershell.exe). */
@@ -40,6 +50,39 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     return `${clientId}:${shell}`;
   }
 
+  private agentsPayload() {
+    return {
+      agents: [...this.agents.values()].map((a) => ({
+        id: a.socketId,
+        host: a.host,
+      })),
+    };
+  }
+
+  private broadcastAgentsList(): void {
+    this.server.emit('agents:list', this.agentsPayload());
+  }
+
+  private isRegisteredAgent(socketId: string): boolean {
+    return this.agents.has(socketId);
+  }
+
+  /** Route browser traffic to the machine the user picked (or the only online agent). */
+  private agentIdForClient(clientId: string): string | null {
+    const picked = this.clientSelectedAgent.get(clientId);
+    if (picked && this.agents.has(picked)) {
+      return picked;
+    }
+    if (this.agents.size === 1) {
+      return [...this.agents.keys()][0] ?? null;
+    }
+    if (this.agents.size > 1) {
+      const sorted = [...this.agents.values()].sort((a, b) => a.connectedAt - b.connectedAt);
+      return sorted[0]?.socketId ?? null;
+    }
+    return null;
+  }
+
   private clearPsParseWaiters(reason: string): void {
     const err = new Error(reason);
     for (const [, w] of this.psParseWaiters) {
@@ -49,8 +92,8 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     this.psParseWaiters.clear();
   }
 
-  private async waitAgentPsParse(text: string): Promise<boolean> {
-    if (!this.agentSocketId) {
+  private async waitAgentPsParse(agentId: string, text: string): Promise<boolean> {
+    if (!this.agents.has(agentId)) {
       throw new Error('No agent');
     }
     return await new Promise<boolean>((resolve, reject) => {
@@ -72,11 +115,11 @@ export class ConsoleGateway implements OnGatewayDisconnect {
         },
         timer,
       });
-      this.server.to(this.agentSocketId!).emit('agent:powershell_parse', { requestId: rid, text });
+      this.server.to(agentId).emit('agent:powershell_parse', { requestId: rid, text });
     });
   }
 
-  private async resolvePowershellComplete(merged: string): Promise<boolean> {
+  private async resolvePowershellComplete(merged: string, agentId: string | null): Promise<boolean> {
     if (this.powershellParser.isAvailable()) {
       try {
         return await this.powershellParser.isSyntacticallyComplete(merged);
@@ -84,9 +127,9 @@ export class ConsoleGateway implements OnGatewayDisconnect {
         /* fall through */
       }
     }
-    if (this.agentSocketId) {
+    if (agentId) {
       try {
-        return await this.waitAgentPsParse(merged);
+        return await this.waitAgentPsParse(agentId, merged);
       } catch {
         /* fall through */
       }
@@ -94,13 +137,27 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     return isPowershellScriptComplete(merged);
   }
 
+  handleConnection(client: Socket) {
+    client.emit('agents:list', this.agentsPayload());
+  }
+
   handleDisconnect(client: Socket) {
-    if (this.agentSocketId === client.id) {
-      this.agentSocketId = null;
+    if (this.isRegisteredAgent(client.id)) {
+      const host = this.agents.get(client.id)?.host ?? client.id;
+      this.agents.delete(client.id);
+      for (const [browserId, agentId] of [...this.clientSelectedAgent.entries()]) {
+        if (agentId === client.id) {
+          this.clientSelectedAgent.delete(browserId);
+        }
+      }
       this.clearPsParseWaiters('Agent disconnected');
-      this.server.emit('log:line', { line: '[console] Agent disconnected.' });
-    } else if (this.agentSocketId) {
-      this.server.to(this.agentSocketId).emit('agent:pty_client_gone', { clientId: client.id });
+      this.server.emit('log:line', { line: `[console] Agent disconnected (${host}).` });
+      this.broadcastAgentsList();
+    } else if (this.agents.size > 0) {
+      for (const agent of this.agents.keys()) {
+        this.server.to(agent).emit('agent:pty_client_gone', { clientId: client.id });
+      }
+      this.clientSelectedAgent.delete(client.id);
     }
     const prefix = `${client.id}:`;
     for (const k of [...this.terminalLineBuffers.keys()]) {
@@ -117,12 +174,42 @@ export class ConsoleGateway implements OnGatewayDisconnect {
   }
 
   @SubscribeMessage('agent:register')
-  agentRegister(@ConnectedSocket() client: Socket) {
-    this.agentSocketId = client.id;
-    this.server.emit('log:line', {
-      line: `[console] Agent registered (socket ${client.id}).`,
+  agentRegister(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: Record<string, unknown>,
+  ) {
+    const host =
+      typeof body?.host === 'string' && body.host.trim()
+        ? body.host.trim()
+        : typeof body?.hostname === 'string'
+          ? body.hostname
+          : client.id.slice(0, 8);
+    this.agents.set(client.id, {
+      socketId: client.id,
+      host,
+      connectedAt: Date.now(),
     });
-    this.server.emit('agent:ready', { ok: true });
+    this.server.emit('log:line', {
+      line: `[console] Agent registered: ${host} (${client.id}).`,
+    });
+    this.broadcastAgentsList();
+    this.server.emit('agent:ready', { ok: true, agentId: client.id, host });
+  }
+
+  @SubscribeMessage('console:select_agent')
+  selectAgent(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { agentId?: string },
+  ) {
+    const agentId = typeof body?.agentId === 'string' ? body.agentId : '';
+    if (!agentId || !this.agents.has(agentId)) {
+      return;
+    }
+    this.clientSelectedAgent.set(client.id, agentId);
+    const host = this.agents.get(agentId)?.host ?? agentId;
+    this.server.emit('log:line', {
+      line: `[console] Browser ${client.id.slice(0, 8)}… selected agent ${host}.`,
+    });
   }
 
   @SubscribeMessage('terminal:input')
@@ -143,12 +230,13 @@ export class ConsoleGateway implements OnGatewayDisconnect {
       }
     }
 
-    if (!this.agentSocketId) {
-      client.emit('terminal:output', {
-        data:
-          '\r\n[no agent] Start the Windows agent from the agent folder: `py src\\main.py --api http://127.0.0.1:4000`\r\n',
-        shell,
-      });
+    const agentId = this.agentIdForClient(client.id);
+    if (!agentId) {
+      const hint =
+        this.agents.size > 1
+          ? '\r\n[no agent selected] Pick a machine in the header dropdown.\r\n'
+          : '\r\n[no agent] Start the Windows agent: `py src\\main.py --api http://YOUR_SERVER:4000`\r\n';
+      client.emit('terminal:output', { data: hint, shell });
       return;
     }
 
@@ -156,7 +244,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
       this.terminalLineBuffers.delete(key);
       const requestId = randomUUID();
       this.shellWaiters.set(requestId, { clientId: client.id, shell });
-      this.server.to(this.agentSocketId).emit('agent:shell_exec', {
+      this.server.to(agentId).emit('agent:shell_exec', {
         requestId,
         command: chunk,
         shell,
@@ -170,7 +258,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     let complete: boolean;
     if (shell === 'powershell') {
       try {
-        complete = await this.resolvePowershellComplete(merged);
+        complete = await this.resolvePowershellComplete(merged, agentId);
       } catch {
         complete = isPowershellScriptComplete(merged);
       }
@@ -195,7 +283,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     this.terminalLineBuffers.delete(key);
     const requestId = randomUUID();
     this.shellWaiters.set(requestId, { clientId: client.id, shell });
-    this.server.to(this.agentSocketId).emit('agent:shell_exec', {
+    this.server.to(agentId).emit('agent:shell_exec', {
       requestId,
       command: merged,
       shell,
@@ -207,7 +295,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     @ConnectedSocket() agent: Socket,
     @MessageBody() body: { requestId?: string; complete?: boolean; error?: string },
   ) {
-    if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+    if (!this.isRegisteredAgent(agent.id)) {
       return;
     }
     const requestId = typeof body?.requestId === 'string' ? body.requestId : '';
@@ -230,7 +318,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     @ConnectedSocket() agent: Socket,
     @MessageBody() body: { requestId?: string; chunk?: string; shell?: string },
   ) {
-    if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+    if (!this.isRegisteredAgent(agent.id)) {
       return;
     }
     const requestId = body?.requestId;
@@ -258,10 +346,15 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     if (!sessionId) {
       return;
     }
-    if (!this.agentSocketId) {
+    const agentId = this.agentIdForClient(client.id);
+    if (!agentId) {
+      const err =
+        this.agents.size > 1
+          ? 'No agent selected — pick a machine in the header.'
+          : 'No agent connected. Start the Windows agent and refresh.';
       client.emit('pty:output', {
         sessionId,
-        error: 'No agent connected. Start the Windows agent and refresh.',
+        error: err,
       });
       return;
     }
@@ -274,7 +367,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     }
     const rows = typeof body?.rows === 'number' ? body.rows : 24;
     const cols = typeof body?.cols === 'number' ? body.cols : 80;
-    this.server.to(this.agentSocketId).emit('agent:pty_start', {
+    this.server.to(agentId).emit('agent:pty_start', {
       clientId: client.id,
       sessionId,
       shell,
@@ -288,14 +381,15 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() body: { sessionId?: string; data?: string },
   ) {
-    if (!this.agentSocketId) {
+    const agentId = this.agentIdForClient(client.id);
+    if (!agentId) {
       return;
     }
     const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
     if (!sessionId) {
       return;
     }
-    this.server.to(this.agentSocketId).emit('agent:pty_input', {
+    this.server.to(agentId).emit('agent:pty_input', {
       clientId: client.id,
       sessionId,
       data: typeof body?.data === 'string' ? body.data : '',
@@ -307,14 +401,15 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() body: { sessionId?: string; rows?: number; cols?: number },
   ) {
-    if (!this.agentSocketId) {
+    const agentId = this.agentIdForClient(client.id);
+    if (!agentId) {
       return;
     }
     const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
     if (!sessionId) {
       return;
     }
-    this.server.to(this.agentSocketId).emit('agent:pty_resize', {
+    this.server.to(agentId).emit('agent:pty_resize', {
       clientId: client.id,
       sessionId,
       rows: typeof body?.rows === 'number' ? body.rows : 24,
@@ -324,14 +419,15 @@ export class ConsoleGateway implements OnGatewayDisconnect {
 
   @SubscribeMessage('pty:close')
   ptyClose(@ConnectedSocket() client: Socket, @MessageBody() body: { sessionId?: string }) {
-    if (!this.agentSocketId) {
+    const agentId = this.agentIdForClient(client.id);
+    if (!agentId) {
       return;
     }
     const sessionId = typeof body?.sessionId === 'string' ? body.sessionId : '';
     if (!sessionId) {
       return;
     }
-    this.server.to(this.agentSocketId).emit('agent:pty_close', {
+    this.server.to(agentId).emit('agent:pty_close', {
       clientId: client.id,
       sessionId,
     });
@@ -350,7 +446,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
       eof?: boolean;
     },
   ) {
-    if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+    if (!this.isRegisteredAgent(agent.id)) {
       return;
     }
     const clientId = typeof body?.clientId === 'string' ? body.clientId : '';
@@ -371,7 +467,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     @ConnectedSocket() agent: Socket,
     @MessageBody() body: { requestId?: string; exitCode?: number; shell?: string },
   ) {
-    if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+    if (!this.isRegisteredAgent(agent.id)) {
       return;
     }
     const requestId = body?.requestId;
@@ -386,16 +482,17 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() body: { action?: string; fps?: number; monitor?: number },
   ) {
-    if (this.agentSocketId && client.id === this.agentSocketId) {
+    if (this.isRegisteredAgent(client.id)) {
       return;
     }
-    if (!this.agentSocketId) {
+    const agentId = this.agentIdForClient(client.id);
+    if (!agentId) {
       client.emit('log:line', {
         line: '[console] Screen control ignored — no agent connected.',
       });
       return;
     }
-    this.server.to(this.agentSocketId).emit('agent:screen_control', {
+    this.server.to(agentId).emit('agent:screen_control', {
       action: body?.action,
       fps: body?.fps,
       monitor: body?.monitor,
@@ -404,7 +501,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
 
   @SubscribeMessage('agent:screen_frame')
   agentScreenFrame(@ConnectedSocket() agent: Socket, @MessageBody() body: Record<string, unknown>) {
-    if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+    if (!this.isRegisteredAgent(agent.id)) {
       return;
     }
     // Broadcast to every socket in this namespace (agent ignores unknown events).
@@ -422,16 +519,20 @@ export class ConsoleGateway implements OnGatewayDisconnect {
     if (!requestId) {
       return;
     }
-    if (!this.agentSocketId) {
+    const agentId = this.agentIdForClient(client.id);
+    if (!agentId) {
       client.emit('portal:result', {
         requestId,
         ok: false,
-        error: 'No agent connected.',
+        error:
+          this.agents.size > 1
+            ? 'No agent selected. Pick a machine in the header.'
+            : 'No agent connected.',
       });
       return;
     }
     this.portalWaiters.set(requestId, client.id);
-    this.server.to(this.agentSocketId).emit('agent:portal_request', {
+    this.server.to(agentId).emit('agent:portal_request', {
       requestId,
       type: body?.type,
       payload: body?.payload,
@@ -449,7 +550,7 @@ export class ConsoleGateway implements OnGatewayDisconnect {
       error?: string;
     },
   ) {
-    if (!this.agentSocketId || agent.id !== this.agentSocketId) {
+    if (!this.isRegisteredAgent(agent.id)) {
       return;
     }
     const requestId = body?.requestId;

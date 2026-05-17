@@ -1,8 +1,8 @@
 #define MyAppName "Console Agent"
 #define MyAppVersion "1.0.0"
 #define MyAppPublisher "Nexus"
-#define MyAppURL "http://3.26.196.232:3000"
-#define MyApiURL "http://3.26.196.232:4000"
+#define MyAppURL "http://52.62.136.167:3000"
+#define MyApiURL "http://52.62.136.167:4000"
 
 [Setup]
 AppId={{B8E4F2A1-9C3D-4E5F-A1B2-3D4E5F6A7B8C}

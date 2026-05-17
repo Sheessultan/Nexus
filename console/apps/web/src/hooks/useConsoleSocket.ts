@@ -5,6 +5,8 @@ import { io, type Socket } from 'socket.io-client';
 
 export type ConnState = 'idle' | 'connecting' | 'open' | 'error';
 
+export type ConsoleAgentRow = { id: string; host: string };
+
 /** Exported for tests / callers that need the same rule as socket URL + transport selection. */
 export function isLoopbackHost(host: string): boolean {
   const h = host.toLowerCase();
@@ -79,6 +81,17 @@ function getConsoleSocketIoParams(): {
   const pageOrigin = window.location.origin;
   const pageHost = window.location.hostname;
   const pageIsLoopback = isLoopbackHost(pageHost);
+  const hasExplicitApiEnv = Boolean(
+    process.env.NEXT_PUBLIC_SOCKET_URL?.trim() || process.env.NEXT_PUBLIC_API_ORIGIN?.trim(),
+  );
+  /** AWS / public IP: connect straight to :4000 (API CORS). Wrong path `/socket.io` on :3000 breaks PTY. */
+  if (hasExplicitApiEnv && !pageIsLoopback) {
+    return {
+      url: directUrl,
+      path: '/socket.io',
+      transports: ['polling', 'websocket'],
+    };
+  }
   try {
     const api = new URL(directUrl);
     const page = new URL(pageOrigin);
@@ -113,14 +126,48 @@ function getConsoleSocketIoParams(): {
 
 const PORTAL_TIMEOUT_MS = 30_000;
 
+function parseAgentsList(raw: unknown): ConsoleAgentRow[] {
+  if (!raw || typeof raw !== 'object') return [];
+  const agents = (raw as { agents?: unknown }).agents;
+  if (!Array.isArray(agents)) return [];
+  return agents
+    .map((a) => {
+      if (!a || typeof a !== 'object') return null;
+      const row = a as { id?: string; host?: string };
+      const id = typeof row.id === 'string' ? row.id : '';
+      const host = typeof row.host === 'string' ? row.host : id.slice(0, 8) || '?';
+      return id ? { id, host } : null;
+    })
+    .filter((x): x is ConsoleAgentRow => x !== null);
+}
+
 export function useConsoleSocket() {
   const socketRef = useRef<Socket | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [conn, setConn] = useState<ConnState>('idle');
   const [agentReady, setAgentReady] = useState(false);
+  const [agents, setAgents] = useState<ConsoleAgentRow[]>([]);
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const selectedAgentRef = useRef<string | null>(null);
   const pendingRef = useRef(
     new Map<string, { resolve: (v: unknown) => void; reject: (e: Error) => void }>(),
   );
+
+  const applyAgents = useCallback((list: ConsoleAgentRow[]) => {
+    setAgents(list);
+    setAgentReady(list.length > 0);
+    const cur = selectedAgentRef.current;
+    if (cur && list.some((a) => a.id === cur)) {
+      return;
+    }
+    const next = list.length === 1 ? list[0]!.id : list[0]?.id ?? null;
+    selectedAgentRef.current = next;
+    setSelectedAgentId(next);
+    const s = socketRef.current;
+    if (s?.connected && next) {
+      s.emit('console:select_agent', { agentId: next });
+    }
+  }, []);
 
   useEffect(() => {
     const { url, path, transports } = getConsoleSocketIoParams();
@@ -160,17 +207,43 @@ export function useConsoleSocket() {
       }
     };
 
+    const onAgentsList = (msg: unknown) => {
+      applyAgents(parseAgentsList(msg));
+    };
+
+    const onAgentReady = (msg?: { agentId?: string; host?: string }) => {
+      setAgentReady(true);
+      if (msg?.agentId) {
+        setAgents((prev) => {
+          const host = msg.host || msg.agentId!.slice(0, 8);
+          if (prev.some((a) => a.id === msg.agentId)) {
+            return prev.map((a) => (a.id === msg.agentId ? { ...a, host } : a));
+          }
+          return [...prev, { id: msg.agentId!, host }];
+        });
+        if (!selectedAgentRef.current) {
+          selectedAgentRef.current = msg.agentId;
+          setSelectedAgentId(msg.agentId);
+          s.emit('console:select_agent', { agentId: msg.agentId });
+        }
+      }
+    };
+
     s.on('connect', () => {
       socketRef.current = s;
       setSocket(s);
       setConn('open');
+      if (selectedAgentRef.current) {
+        s.emit('console:select_agent', { agentId: selectedAgentRef.current });
+      }
     });
     s.on('disconnect', () => {
       setConn('idle');
       setAgentReady(false);
+      setAgents([]);
     });
-    const onAgentReady = () => setAgentReady(true);
     s.on('log:line', onLog);
+    s.on('agents:list', onAgentsList);
     s.on('agent:ready', onAgentReady);
     s.on('connect_error', () => {
       setConn('error');
@@ -182,6 +255,7 @@ export function useConsoleSocket() {
     return () => {
       s.off('portal:result', onPortal);
       s.off('log:line', onLog);
+      s.off('agents:list', onAgentsList);
       s.off('agent:ready', onAgentReady);
       s.disconnect();
       socketRef.current = null;
@@ -189,7 +263,20 @@ export function useConsoleSocket() {
       setSocket(null);
       setConn('idle');
       setAgentReady(false);
+      setAgents([]);
+      selectedAgentRef.current = null;
+      setSelectedAgentId(null);
     };
+  }, [applyAgents]);
+
+  const selectAgent = useCallback((agentId: string) => {
+    if (!agentId) return;
+    selectedAgentRef.current = agentId;
+    setSelectedAgentId(agentId);
+    const s = socketRef.current;
+    if (s?.connected) {
+      s.emit('console:select_agent', { agentId });
+    }
   }, []);
 
   const portalRequest = useCallback((type: string, payload?: Record<string, unknown>) => {
@@ -222,5 +309,13 @@ export function useConsoleSocket() {
     });
   }, []);
 
-  return { socket, conn, agentReady, portalRequest };
+  return {
+    socket,
+    conn,
+    agentReady,
+    agents,
+    selectedAgentId,
+    selectAgent,
+    portalRequest,
+  };
 }

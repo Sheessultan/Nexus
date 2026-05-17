@@ -4,8 +4,8 @@ $here = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location $here
 
 $version = "1.0.0"
-$apiUrl = "http://3.26.196.232:4000"
-$portalUrl = "http://3.26.196.232:3000"
+$apiUrl = "http://52.62.136.167:4000"
+$portalUrl = "http://52.62.136.167:3000"
 
 & "$here\build-exe.ps1"
 
