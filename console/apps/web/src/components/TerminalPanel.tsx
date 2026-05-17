@@ -117,7 +117,7 @@ export default function TerminalPanel({
       if (!socket.connected) return;
       stopPty();
       fit.fit();
-      const sid = crypto.randomUUID();
+      const sid = Math.random().toString(36).substring(2) + Date.now();   
       sessionIdRef.current = sid;
       socket.emit('pty:start', {
         sessionId: sid,
