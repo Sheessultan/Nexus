@@ -101,6 +101,9 @@ export default function TerminalPanel({
     term.loadAddon(fit);
     term.open(el);
     fit.fit();
+    setTimeout(() => {
+  term.focus();
+}, 100);
 
     const stopPty = () => {
       const sid = sessionIdRef.current;
@@ -409,7 +412,10 @@ export default function TerminalPanel({
         </div>
       ) : null}
       <div
-        ref={hostRef}
+      ref={hostRef}
+     onClick={() => {
+    termRef.current?.focus();
+       }}
         className="cyber-scroll min-h-[220px] flex-1 overflow-hidden rounded-lg border border-cyan-500/15 bg-black/20 p-1.5 outline-none focus-within:shadow-[0_0_24px_rgba(57,255,20,0.08)] focus-within:ring-2 focus-within:ring-cyan-400/25"
       />
     </div>
